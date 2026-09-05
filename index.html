@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Torneo Sintrainagro</title>
+<meta property="og:title" content="Torneo Sintrainagro">
+<meta property="og:description" content="Ingresa con tu PIN para gestionar tu equipo, jugadores y partidos.">
+<meta property="og:image" content="https://TUUSUARIO.github.io/torneosintrainagro/logo.png">
+<meta property="og:type" content="website">
+<link rel="icon" type="image/png" href="logo.png">
+<base target="_top">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Work+Sans:wght@400;500;600&family=Bebas+Neue&display=swap');
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:'Work Sans',system-ui,sans-serif; background:#EEF3ED; color:#152922; }
+  .bebas { font-family:'Bebas Neue',sans-serif; letter-spacing:.02em; }
+  header { background:#123626; color:#F2F5F0; padding:14px 18px; display:flex; align-items:center; justify-content:space-between; position:sticky; top:0; z-index:20; }
+  header .brand { font-size:24px; }
+  header button { background:transparent; border:1px solid #3F7D58; color:#CFE8D8; border-radius:20px; padding:6px 12px; font-size:13px; cursor:pointer; }
+  main { max-width:720px; margin:0 auto; padding:16px 14px 90px; }
+  h2.bebas { font-size:26px; margin:0; }
+  .sub { margin:2px 0 14px; font-size:13px; color:#5b6b62; }
+  .card { background:#fff; border-radius:12px; padding:14px; margin-bottom:8px; box-shadow:0 1px 3px rgba(0,0,0,.05); }
+  input, select { width:100%; padding:10px; border-radius:8px; border:1px solid #d8ded8; margin-bottom:8px; font-size:14px; font-family:inherit; }
+  label.chk { display:flex; align-items:center; gap:8px; font-size:14px; margin:10px 0; }
+  .btn-primary { background:#123626; color:#fff; border:none; border-radius:10px; padding:10px 16px; font-size:14px; font-weight:600; cursor:pointer; }
+  .btn-ghost { background:transparent; color:#123626; border:1px solid #c7d2c9; border-radius:10px; padding:10px 16px; font-size:14px; font-weight:600; cursor:pointer; }
+  .btn-add { width:100%; background:#fff; border:1px dashed #9db3a2; border-radius:12px; padding:14px; font-size:14px; font-weight:600; color:#123626; cursor:pointer; }
+  .badge { font-size:11px; font-weight:600; padding:3px 8px; border-radius:20px; margin-right:6px; display:inline-block; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .photo { width:56px; height:56px; border-radius:10px; background:#dfe7e0; flex-shrink:0; overflow:hidden; display:flex; align-items:center; justify-content:center; }
+  .photo img { width:100%; height:100%; object-fit:cover; }
+  .tabbar { position:fixed; bottom:0; left:0; right:0; background:#fff; border-top:1px solid #e2e8e3; display:flex; z-index:20; }
+  .tabbar button { flex:1; border:none; background:transparent; padding:10px 4px 12px; font-size:11px; font-weight:600; color:#8a978d; cursor:pointer; }
+  .tabbar button.active { color:#123626; }
+  .row { display:flex; gap:10px; align-items:center; }
+  .toggle { border:none; border-radius:20px; padding:6px 10px; font-size:12px; font-weight:600; background:#eef1ee; color:#5b6b62; cursor:pointer; }
+  .toggle.on-t { background:#123626; color:#fff; }
+  .toggle.on-s { background:#3F7D58; color:#fff; }
+  .muted { color:#8a978d; font-size:13px; }
+  .pin-input { letter-spacing:6px; font-size:22px; text-align:center; font-family:'Bebas Neue',sans-serif; }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand bebas">Torneo Sintrainagro</div>
+  <div id="whoami"></div>
+</header>
+<main id="app"></main>
+
+<script>
+const API_URL = 'https://script.google.com/macros/s/AKfycbwSPtk7m5Ulc2EcSQ486KZFoJiL91dG9sZeKXIFb07oWifRyuQmVobIVlJvFJUawdPK/exec';
+
+function gsCall(fn, ...args) {
+  return fetch(API_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ action: fn, params: args })
+  })
+    .then(r => r.json())
+    .then(res => {
+      if (!res.ok) throw new Error(res.error || 'Error desconocido');
+      return res.data;
+    });
+}
+
+const POSITIONS = ['Portero','Defensa','Volante','Delantero'];
+const STATUS = {
+  habilitado: {label:'Habilitado', color:'#2E7D46', bg:'#E7F3EA'},
+  suspendido: {label:'Suspendido', color:'#B3261E', bg:'#FBEAE9'},
+  lesionado:  {label:'Lesionado',  color:'#B8860B', bg:'#FBF3DC'}
+};
+
+function fmtTime(iso){ try { const d=new Date(iso); return d.toLocaleString('es-CO',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}); } catch(e){ return iso; } }
+function esc(s){ return (s||'').toString().replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+function resizeImage(file, maxSize=220, quality=0.6){
+  return new Promise((resolve)=>{
+    const reader = new FileReader();
+    reader.onload = (e)=>{
+      const img = new Image();
+      img.onload = ()=>{
+        let w=img.width, h=img.height;
+        const scale = Math.min(1, maxSize/Math.max(w,h));
+        w = Math.round(w*scale); h = Math.round(h*scale);
+        const c = document.createElement('canvas'); c.width=w; c.height=h;
+        c.getContext('2d').drawImage(img,0,0,w,h);
+        resolve(c.toDataURL('image/jpeg', quality));
+      };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+const app = document.getElementById('app');
+let STATE = { tab: null, rol: null, team: null };
+
+function renderPinGate(errorMsg) {
+  document.getElementById('whoami').innerHTML = '';
+  app.innerHTML = `<div style="padding-top:24px">
+    <h2 class="bebas" style="font-size:34px;margin:0 0 4px">Ingresa tu PIN</h2>
+    <p class="sub">El organizador tiene su PIN. Cada equipo tiene el suyo, distinto e independiente. Pídele el tuyo al organizador si no lo tienes.</p>
+    <div class="card">
+      <input id="pinInput" class="pin-input" maxlength="6" inputmode="numeric" placeholder="••••">
+      <div style="color:#B3261E;font-size:13px;margin-bottom:8px">${errorMsg ? esc(errorMsg) : ''}</div>
+      <button class="btn-primary" onclick="intentarPin()">Entrar</button>
+    </div>
+  </div>`;
+  document.getElementById('pinInput').focus();
+  document.getElementById('pinInput').addEventListener('keydown', e => { if (e.key === 'Enter') intentarPin(); });
+}
+
+async function intentarPin() {
+  const pin = document.getElementById('pinInput').value.trim();
+  if (!pin) return;
+  const res = await gsCall('verificarPin', pin);
+  if (!res) { renderPinGate('PIN incorrecto. Intenta de nuevo.'); return; }
+  if (res.rol === 'organizador') {
+    STATE.rol = 'organizador'; STATE.tab = 'equipos';
+    document.getElementById('whoami').innerHTML = '<button onclick="cerrarSesion()">Organizador · salir</button>';
+    renderOrg();
+  } else {
+    STATE.rol = 'equipo'; STATE.team = res.equipo; STATE.tab = 'planilla';
+    document.getElementById('whoami').innerHTML = `<button onclick="cerrarSesion()">${esc(res.equipo.nombre)} · salir</button>`;
+    renderDelegate();
+  }
+}
+
+function cerrarSesion() { STATE = { tab: null, rol: null, team: null }; renderPinGate(); }
+
+// ================= ORGANIZADOR =================
+async function renderOrg() {
+  const tabs = [['equipos','Equipos'],['carnets','Carnets'],['partidos','Partidos'],['actividad','Actividad']];
+  app.innerHTML = '<div id="content"></div>' + tabBarHtml(tabs, STATE.tab, 'renderOrg');
+  const content = document.getElementById('content');
+  if (STATE.tab === 'equipos') content.innerHTML = await orgEquiposHtml();
+  if (STATE.tab === 'carnets') content.innerHTML = await orgCarnetsHtml();
+  if (STATE.tab === 'partidos') content.innerHTML = await orgPartidosHtml();
+  if (STATE.tab === 'actividad') content.innerHTML = await actividadHtml();
+}
+
+function tabBarHtml(tabs, active, renderFn) {
+  return '<div class="tabbar">' + tabs.map(([k,l]) =>
+    `<button class="${active===k?'active':''}" onclick="STATE.tab='${k}'; ${renderFn}();">${l}</button>`
+  ).join('') + '</div>';
+}
+
+async function orgEquiposHtml() {
+  const teams = await gsCall('getEquipos');
+  let html = `<h2 class="bebas">Equipos del torneo</h2><p class="sub">${teams.length} equipo(s) inscrito(s) — agrega los que quieras, sin límite. El PIN de cada equipo es independiente: compártelo solo con su delegado.</p>`;
+  teams.forEach(t => {
+    html += `<div class="card">
+      <div style="font-weight:600;font-size:16px">${esc(t.nombre)}</div>
+      <div class="muted">Delegado: ${esc(t.delegado)||'—'} · DT: ${esc(t.dt)||'—'}</div>
+      <div class="row" style="margin-top:8px">
+        <div class="bebas" style="font-size:20px;letter-spacing:3px">PIN ${esc(t.pin)}</div>
+        <button class="btn-ghost" onclick="regenerarPin('${t.id}')">Generar PIN nuevo</button>
+      </div>
+    </div>`;
+  });
+  html += `<div class="card" id="teamForm" style="display:none">
+    <input id="t_nombre" placeholder="Nombre del equipo">
+    <input id="t_delegado" placeholder="Nombre del delegado">
+    <input id="t_dt" placeholder="Nombre del técnico/DT">
+    <button class="btn-primary" onclick="submitTeam()">Guardar equipo</button>
+    <button class="btn-ghost" onclick="document.getElementById('teamForm').style.display='none'; document.getElementById('addTeamBtn').style.display='block';">Cancelar</button>
+  </div>
+  <button class="btn-add" id="addTeamBtn" onclick="document.getElementById('teamForm').style.display='block'; this.style.display='none';">+ Agregar equipo</button>`;
+  return html;
+}
+
+async function submitTeam() {
+  const nombre = document.getElementById('t_nombre').value.trim();
+  if (!nombre) return;
+  const r = await gsCall('addEquipo', nombre, document.getElementById('t_delegado').value.trim(), document.getElementById('t_dt').value.trim());
+  renderOrg();
+}
+
+async function regenerarPin(equipoId) {
+  await gsCall('regenerarPinEquipo', equipoId);
+  renderOrg();
+}
+
+async function orgCarnetsHtml() {
+  const players = await gsCall('getJugadoresTodos');
+  let html = `<h2 class="bebas">Carnets del torneo</h2><p class="sub">${players.length} jugador(es) registrados en total</p>`;
+  html += '<div class="grid2">' + players.map(p => playerCardHtml(p, p.equipoNombre)).join('') + '</div>';
+  if (players.length === 0) html += '<p class="muted">Aún no hay jugadores.</p>';
+  return html;
+}
+
+async function orgPartidosHtml() {
+  const [matches, teams] = [await gsCall('getPartidos'), await gsCall('getEquipos')];
+  const nombreDe = {}; teams.forEach(t => nombreDe[t.id] = t.nombre);
+  let html = `<h2 class="bebas">Partidos</h2><p class="sub">Programa partidos y revisa alineaciones y cambios.</p>`;
+  if (matches.length === 0) html += '<p class="muted">Aún no hay partidos programados.</p>';
+  for (const m of matches) {
+    html += `<div class="card" onclick="verPartido('${m.id}')" style="cursor:pointer">
+      <div style="font-weight:600">${esc(m.nombre)}</div>
+      <div class="muted">${esc(nombreDe[m.equipoA])} vs ${esc(nombreDe[m.equipoB])}${m.fecha?' · '+esc(m.fecha):''}</div>
+    </div>`;
+  }
+  html += `<div class="card" id="matchForm" style="display:none">
+    <input id="m_nombre" placeholder="Nombre del partido (ej. Jornada 3)">
+    <input id="m_fecha" type="date">
+    <select id="m_a"><option value="">Equipo local…</option>${teams.map(t=>`<option value="${t.id}">${esc(t.nombre)}</option>`).join('')}</select>
+    <select id="m_b"><option value="">Equipo visitante…</option>${teams.map(t=>`<option value="${t.id}">${esc(t.nombre)}</option>`).join('')}</select>
+    <button class="btn-primary" onclick="submitMatch()">Programar partido</button>
+    <button class="btn-ghost" onclick="document.getElementById('matchForm').style.display='none'; document.getElementById('addMatchBtn').style.display='block';">Cancelar</button>
+  </div>
+  <button class="btn-add" id="addMatchBtn" onclick="document.getElementById('matchForm').style.display='block'; this.style.display='none';">+ Programar partido</button>`;
+  return html;
+}
+
+async function submitMatch() {
+  const nombre = document.getElementById('m_nombre').value.trim() || 'Partido';
+  const a = document.getElementById('m_a').value, b = document.getElementById('m_b').value;
+  if (!a || !b || a===b) return;
+  await gsCall('addPartido', nombre, document.getElementById('m_fecha').value, a, b);
+  renderOrg();
+}
+
+async function verPartido(matchId) {
+  const [matches, teams] = [await gsCall('getPartidos'), await gsCall('getEquipos')];
+  const m = matches.find(x => x.id === matchId);
+  const teamA = teams.find(t => t.id === m.equipoA), teamB = teams.find(t => t.id === m.equipoB);
+  const content = document.getElementById('content');
+  content.innerHTML = '<p class="muted">Cargando…</p>';
+  const blockHtml = async (team) => {
+    const players = await gsCall('getJugadores', team.id);
+    const nombreDe = {}; players.forEach(p => nombreDe[p.id] = p.nombre);
+    const lu = await gsCall('getAlineacion', matchId, team.id);
+    const cambios = await gsCall('getCambios', matchId, team.id);
+    let h = `<div class="card"><div style="font-weight:600;margin-bottom:6px">${esc(team.nombre)}</div>`;
+    if (!lu) { h += '<p class="muted">El delegado aún no confirma la alineación.</p>'; }
+    else {
+      h += `<div class="muted">Titulares</div><div style="margin-bottom:8px">${lu.titulares.map(id=>esc(nombreDe[id]||'—')).join(', ')}</div>`;
+      h += `<div class="muted">Suplentes</div><div>${lu.suplentes.map(id=>esc(nombreDe[id]||'—')).join(', ')||'—'}</div>`;
+    }
+    if (cambios.length) {
+      h += '<div style="margin-top:10px;border-top:1px solid #eef1ee;padding-top:8px"><div class="muted">Cambios</div>';
+      cambios.sort((a,b)=>a.minuto-b.minuto).forEach(c => {
+        h += `<div style="font-size:13px">${c.minuto}' — sale ${esc(nombreDe[c.saleId]||'—')}, entra ${esc(nombreDe[c.entraId]||'—')}</div>`;
+      });
+      h += '</div>';
+    }
+    h += '</div>';
+    return h;
+  };
+  content.innerHTML = `<button class="btn-ghost" onclick="renderOrg()">← Volver a partidos</button>
+    <h2 class="bebas" style="margin-top:12px">${esc(m.nombre)}</h2><p class="sub">${esc(m.fecha||'')}</p>` +
+    (await blockHtml(teamA)) + (await blockHtml(teamB));
+}
+
+async function actividadHtml() {
+  const activity = await gsCall('getActividad');
+  let html = `<h2 class="bebas">Actividad</h2><p class="sub">Alineaciones confirmadas y cambios, en orden.</p>`;
+  if (activity.length === 0) html += '<p class="muted">Todavía no hay novedades.</p>';
+  activity.forEach(a => {
+    html += `<div class="card"><div>${esc(a.texto)}</div><div class="muted" style="margin-top:2px">${fmtTime(a.ts)}</div></div>`;
+  });
+  return html;
+}
+
+function playerCardHtml(p, equipoNombre) {
+  const st = STATUS[p.estado] || STATUS.habilitado;
+  return `<div class="card" style="padding:12px">
+    <div class="row">
+      <div class="photo">${p.fotoUrl ? `<img src="${esc(p.fotoUrl)}">` : ''}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(p.nombre)}</div>
+        <div class="bebas" style="font-size:20px;color:#123626;line-height:1">#${esc(p.numero)}</div>
+        <div class="muted">${esc(p.posicion)}${equipoNombre?' · '+esc(equipoNombre):''}</div>
+      </div>
+    </div>
+    <div style="margin-top:8px">
+      <span class="badge" style="color:${st.color};background:${st.bg}">${st.label}</span>
+      ${p.cuarenton ? '<span class="badge" style="color:#7A4E00;background:#FDECC8">Cuarentón</span>' : ''}
+    </div>
+  </div>`;
+}
+
+// ================= DELEGADO =================
+async function renderDelegate() {
+  const tabs = [['planilla','Planilla'],['carnets','Carnets'],['alineacion','Alineación'],['vivo','En vivo']];
+  app.innerHTML = '<div id="content"></div>' + tabBarHtml(tabs, STATE.tab, 'renderDelegate');
+  const content = document.getElementById('content');
+  if (STATE.tab === 'planilla') content.innerHTML = await planillaHtml();
+  if (STATE.tab === 'carnets') content.innerHTML = await delegateCarnetsHtml();
+  if (STATE.tab === 'alineacion') await alineacionRender(content);
+  if (STATE.tab === 'vivo') await enVivoRender(content);
+}
+
+async function planillaHtml() {
+  const players = await gsCall('getJugadores', STATE.team.id);
+  let html = `<h2 class="bebas">Planilla — ${esc(STATE.team.nombre)}</h2><p class="sub">Delegado: ${esc(STATE.team.delegado)||'—'} · DT: ${esc(STATE.team.dt)||'—'}</p>`;
+  players.forEach(p => {
+    html += `<div class="card row">
+      <div class="photo" style="width:42px;height:42px">${p.fotoUrl?`<img src="${esc(p.fotoUrl)}">`:''}</div>
+      <div style="flex:1" onclick="editPlayer('${p.id}')">
+        <div style="font-weight:600;font-size:14px">#${esc(p.numero)} ${esc(p.nombre)}${p.cuarenton?' · Cuarentón':''}</div>
+        <div class="muted">${esc(p.posicion)} · ${STATUS[p.estado]?.label||''}</div>
+      </div>
+      <button class="btn-ghost" onclick="editPlayer('${p.id}')">Editar</button>
+      <button class="btn-ghost" style="color:#B3261E" onclick="removePlayer('${p.id}')">Eliminar</button>
+    </div>`;
+  });
+  html += `<button class="btn-add" id="addPlayerBtn" onclick="showPlayerForm()">+ Agregar jugador</button>
+  <div class="card" id="playerForm" style="display:none">
+    <div class="row" style="margin-bottom:10px; flex-wrap:wrap; gap:8px">
+      <div class="photo" id="photoPreview" style="width:64px;height:64px"></div>
+      <label class="btn-ghost">Tomar foto<input type="file" accept="image/*" capture="environment" style="display:none" onchange="onPhotoChosen(this.files[0])"></label>
+      <label class="btn-ghost">Subir archivo<input type="file" accept="image/*" style="display:none" onchange="onPhotoChosen(this.files[0])"></label>
+    </div>
+    <input id="p_nombre" placeholder="Nombre completo">
+    <input id="p_doc" placeholder="Número de identificación (cédula)">
+    <input id="p_nac" type="date">
+    <input id="p_num" type="number" placeholder="Número de camiseta">
+    <select id="p_pos">${POSITIONS.map(x=>`<option>${x}</option>`).join('')}</select>
+    <select id="p_estado">${Object.entries(STATUS).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join('')}</select>
+    <label class="chk"><input type="checkbox" id="p_cuarenton"> Jugador cuarentón (mayor de 40)</label>
+    <div id="p_error" style="color:#B3261E;font-size:13px;margin-bottom:8px"></div>
+    <button class="btn-primary" onclick="savePlayer()">Guardar</button>
+    <button class="btn-ghost" onclick="document.getElementById('playerForm').style.display='none'; document.getElementById('addPlayerBtn').style.display='block';">Cancelar</button>
+  </div>`;
+  return html;
+}
+
+let editingId = null, currentPhoto = null;
+function showPlayerForm() {
+  editingId = null; currentPhoto = null;
+  ['p_nombre','p_doc','p_num'].forEach(id => document.getElementById(id).value='');
+  document.getElementById('p_nac').value=''; document.getElementById('p_pos').selectedIndex=0;
+  document.getElementById('p_estado').value='habilitado'; document.getElementById('p_cuarenton').checked=false;
+  document.getElementById('photoPreview').innerHTML=''; document.getElementById('p_error').innerText='';
+  document.getElementById('playerForm').style.display='block';
+  document.getElementById('addPlayerBtn').style.display='none';
+}
+async function editPlayer(id) {
+  const players = await gsCall('getJugadores', STATE.team.id);
+  const p = players.find(x => x.id === id);
+  editingId = id; currentPhoto = null;
+  document.getElementById('p_nombre').value = p.nombre;
+  document.getElementById('p_doc').value = p.docId;
+  document.getElementById('p_nac').value = p.nacimiento;
+  document.getElementById('p_num').value = p.numero;
+  document.getElementById('p_pos').value = p.posicion;
+  document.getElementById('p_estado').value = p.estado;
+  document.getElementById('p_cuarenton').checked = !!p.cuarenton;
+  document.getElementById('photoPreview').innerHTML = p.fotoUrl ? `<img src="${esc(p.fotoUrl)}">` : '';
+  document.getElementById('p_error').innerText = '';
+  document.getElementById('playerForm').style.display = 'block';
+  document.getElementById('addPlayerBtn').style.display = 'none';
+}
+async function onPhotoChosen(file) {
+  if (!file) return;
+  currentPhoto = await resizeImage(file);
+  document.getElementById('photoPreview').innerHTML = `<img src="${currentPhoto}">`;
+}
+async function savePlayer() {
+  const nombre = document.getElementById('p_nombre').value.trim();
+  const numero = document.getElementById('p_num').value;
+  if (!nombre || !numero) { document.getElementById('p_error').innerText = 'Nombre y número de camiseta son obligatorios.'; return; }
+  const jugador = {
+    id: editingId, nombre, docId: document.getElementById('p_doc').value.trim(),
+    nacimiento: document.getElementById('p_nac').value, numero,
+    posicion: document.getElementById('p_pos').value, estado: document.getElementById('p_estado').value,
+    cuarenton: document.getElementById('p_cuarenton').checked
+  };
+  try {
+    await gsCall('guardarJugador', STATE.team.id, jugador, currentPhoto);
+    renderDelegate();
+  } catch (e) {
+    document.getElementById('p_error').innerText = (e && e.message) ? e.message : 'No se pudo guardar.';
+  }
+}
+async function removePlayer(id) {
+  await gsCall('eliminarJugador', id);
+  renderDelegate();
+}
+
+async function delegateCarnetsHtml() {
+  const players = await gsCall('getJugadores', STATE.team.id);
+  let html = `<h2 class="bebas">Carnets — ${esc(STATE.team.nombre)}</h2><p class="sub">${players.length} jugador(es) en la plantilla</p>`;
+  html += '<div class="grid2">' + players.map(p => playerCardHtml(p)).join('') + '</div>';
+  return html;
+}
+
+async function alineacionRender(content) {
+  const matches = (await gsCall('getPartidos')).filter(m => m.equipoA === STATE.team.id || m.equipoB === STATE.team.id);
+  const players = await gsCall('getJugadores', STATE.team.id);
+  content.innerHTML = `<h2 class="bebas">Alineación — ${esc(STATE.team.nombre)}</h2><p class="sub">Elige titulares y suplentes de tu plantilla</p>
+    <select id="al_match" onchange="alineacionCargar()"><option value="">Elige un partido…</option>${matches.map(m=>`<option value="${m.id}">${esc(m.nombre)}${m.fecha?' · '+esc(m.fecha):''}</option>`).join('')}</select>
+    <div id="al_body"></div>`;
+  window.__alPlayers = players;
+}
+let alTitulares = [], alSuplentes = [];
+async function alineacionCargar() {
+  const matchId = document.getElementById('al_match').value;
+  const body = document.getElementById('al_body');
+  if (!matchId) { body.innerHTML = ''; return; }
+  const lu = await gsCall('getAlineacion', matchId, STATE.team.id);
+  alTitulares = lu ? lu.titulares : [];
+  alSuplentes = lu ? lu.suplentes : [];
+  alineacionRedibujar(matchId, !!lu);
+}
+function alineacionRedibujar(matchId, confirmed) {
+  const body = document.getElementById('al_body');
+  const players = window.__alPlayers;
+  let html = `<div class="muted" style="margin:10px 0">Titulares: ${alTitulares.length}/11 · Suplentes: ${alSuplentes.length}</div>`;
+  if (players.length === 0) html += '<p class="muted">Agrega jugadores en Planilla primero.</p>';
+  players.forEach(p => {
+    const isT = alTitulares.includes(p.id), isS = alSuplentes.includes(p.id);
+    html += `<div class="card row" style="padding:10px">
+      <div style="flex:1;font-size:14px">#${esc(p.numero)} ${esc(p.nombre)} <span class="muted">· ${esc(p.posicion)}</span></div>
+      <button class="toggle ${isT?'on-t':''}" onclick="alToggle('t','${p.id}','${matchId}',${confirmed})">Titular</button>
+      <button class="toggle ${isS?'on-s':''}" onclick="alToggle('s','${p.id}','${matchId}',${confirmed})">Suplente</button>
+    </div>`;
+  });
+  html += `<button class="btn-primary" style="margin-top:8px" onclick="alConfirmar('${matchId}')">${confirmed?'Actualizar alineación confirmada':'Confirmar alineación'}</button>`;
+  if (confirmed) html += '<p style="color:#3F7D58;font-size:12px;margin-top:6px">✓ El organizador fue notificado.</p>';
+  body.innerHTML = html;
+}
+function alToggle(kind, id, matchId, confirmed) {
+  if (kind === 't') {
+    if (alTitulares.includes(id)) alTitulares = alTitulares.filter(x=>x!==id);
+    else if (!alSuplentes.includes(id) && alTitulares.length < 11) alTitulares.push(id);
+  } else {
+    if (alSuplentes.includes(id)) alSuplentes = alSuplentes.filter(x=>x!==id);
+    else if (!alTitulares.includes(id)) alSuplentes.push(id);
+  }
+  alineacionRedibujar(matchId, confirmed);
+}
+async function alConfirmar(matchId) {
+  const matches = await gsCall('getPartidos');
+  const m = matches.find(x => x.id === matchId);
+  await gsCall('guardarAlineacion', matchId, STATE.team.id, alTitulares, alSuplentes, STATE.team.nombre, m.nombre);
+  alineacionRedibujar(matchId, true);
+}
+
+async function enVivoRender(content) {
+  const matches = (await gsCall('getPartidos')).filter(m => m.equipoA === STATE.team.id || m.equipoB === STATE.team.id);
+  content.innerHTML = `<h2 class="bebas">Partido en vivo — ${esc(STATE.team.nombre)}</h2><p class="sub">Registra los cambios a medida que ocurren</p>
+    <select id="ev_match" onchange="enVivoCargar()"><option value="">Elige un partido…</option>${matches.map(m=>`<option value="${m.id}">${esc(m.nombre)}${m.fecha?' · '+esc(m.fecha):''}</option>`).join('')}</select>
+    <div id="ev_body"></div>`;
+}
+async function enVivoCargar() {
+  const matchId = document.getElementById('ev_match').value;
+  const body = document.getElementById('ev_body');
+  if (!matchId) { body.innerHTML=''; return; }
+  const lu = await gsCall('getAlineacion', matchId, STATE.team.id);
+  if (!lu) { body.innerHTML = '<p class="muted">Primero confirma la alineación titular en la pestaña Alineación.</p>'; return; }
+  const players = await gsCall('getJugadores', STATE.team.id);
+  const log = await gsCall('getCambios', matchId, STATE.team.id);
+  const nombreDe = {}; players.forEach(p=>nombreDe[p.id]=p.nombre);
+  const salidos = log.map(c=>c.saleId), entrados = log.map(c=>c.entraId);
+  const disponibles = [...lu.titulares.filter(id=>!salidos.includes(id)), ...entrados.filter(id=>!salidos.includes(id))];
+  const banca = lu.suplentes.filter(id=>!entrados.includes(id));
+  let html = `<div class="card">
+    <div class="muted" style="margin-bottom:8px">Registrar cambio</div>
+    <select id="ev_out"><option value="">Sale…</option>${disponibles.map(id=>`<option value="${id}">${esc(nombreDe[id]||'—')}</option>`).join('')}</select>
+    <select id="ev_in"><option value="">Entra…</option>${banca.map(id=>`<option value="${id}">${esc(nombreDe[id]||'—')}</option>`).join('')}</select>
+    <input id="ev_min" type="number" placeholder="Minuto">
+    <button class="btn-primary" onclick="enVivoRegistrar('${matchId}')">Registrar cambio</button>
+  </div>
+  <div class="muted" style="margin:10px 0 6px">Historial del partido</div>`;
+  if (log.length === 0) html += '<p class="muted">Sin cambios registrados aún.</p>';
+  log.sort((a,b)=>a.minuto-b.minuto).forEach(c => {
+    html += `<div class="card">${c.minuto}' — sale ${esc(nombreDe[c.saleId]||'—')}, entra ${esc(nombreDe[c.entraId]||'—')}</div>`;
+  });
+  body.innerHTML = html;
+}
+async function enVivoRegistrar(matchId) {
+  const outId = document.getElementById('ev_out').value, inId = document.getElementById('ev_in').value, minuto = document.getElementById('ev_min').value;
+  if (!outId || !inId || !minuto) return;
+  const players = await gsCall('getJugadores', STATE.team.id);
+  const nombreDe = {}; players.forEach(p=>nombreDe[p.id]=p.nombre);
+  const matches = await gsCall('getPartidos');
+  const m = matches.find(x=>x.id===matchId);
+  await gsCall('addCambio', matchId, STATE.team.id, outId, inId, Number(minuto), STATE.team.nombre, m.nombre, nombreDe[outId], nombreDe[inId]);
+  enVivoCargar();
+}
+
+renderPinGate();
+</script>
+</body>
+</html>
