@@ -5,7 +5,7 @@
 <title>Torneo Sintrainagro</title>
 <meta property="og:title" content="Torneo Sintrainagro">
 <meta property="og:description" content="Ingresa con tu PIN para gestionar tu equipo, jugadores y partidos.">
-<meta property="og:image" content="https://TUUSUARIO.github.io/torneosintrainagro/logo.png">
+<meta property="og:image" content="https://torneosintrainagro-s.github.io/torneosintrainagro/logo.png">
 <meta property="og:type" content="website">
 <link rel="icon" type="image/png" href="logo.png">
 <base target="_top">
@@ -65,6 +65,7 @@ function gsCall(fn, ...args) {
 }
 
 const POSITIONS = ['Portero','Defensa','Volante','Delantero'];
+const RH_TYPES = ['O+','O-','A+','A-','B+','B-','AB+','AB-'];
 const STATUS = {
   habilitado: {label:'Habilitado', color:'#2E7D46', bg:'#E7F3EA'},
   suspendido: {label:'Suspendido', color:'#B3261E', bg:'#FBEAE9'},
@@ -276,6 +277,7 @@ function playerCardHtml(p, equipoNombre) {
     </div>
     <div style="margin-top:8px">
       <span class="badge" style="color:${st.color};background:${st.bg}">${st.label}</span>
+      ${p.rh ? `<span class="badge" style="color:#B3261E;background:#FBEAE9">RH ${esc(p.rh)}</span>` : ''}
       ${p.cuarenton ? '<span class="badge" style="color:#7A4E00;background:#FDECC8">Cuarentón</span>' : ''}
     </div>
   </div>`;
@@ -316,6 +318,7 @@ async function planillaHtml() {
     <input id="p_nombre" placeholder="Nombre completo">
     <input id="p_doc" placeholder="Número de identificación (cédula)">
     <input id="p_nac" type="date">
+    <select id="p_rh"><option value="">RH / tipo de sangre…</option>${RH_TYPES.map(x=>`<option value="${x}">${x}</option>`).join('')}</select>
     <input id="p_num" type="number" placeholder="Número de camiseta">
     <select id="p_pos">${POSITIONS.map(x=>`<option>${x}</option>`).join('')}</select>
     <select id="p_estado">${Object.entries(STATUS).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join('')}</select>
@@ -331,7 +334,7 @@ let editingId = null, currentPhoto = null;
 function showPlayerForm() {
   editingId = null; currentPhoto = null;
   ['p_nombre','p_doc','p_num'].forEach(id => document.getElementById(id).value='');
-  document.getElementById('p_nac').value=''; document.getElementById('p_pos').selectedIndex=0;
+  document.getElementById('p_nac').value=''; document.getElementById('p_rh').value=''; document.getElementById('p_pos').selectedIndex=0;
   document.getElementById('p_estado').value='habilitado'; document.getElementById('p_cuarenton').checked=false;
   document.getElementById('photoPreview').innerHTML=''; document.getElementById('p_error').innerText='';
   document.getElementById('playerForm').style.display='block';
@@ -344,6 +347,7 @@ async function editPlayer(id) {
   document.getElementById('p_nombre').value = p.nombre;
   document.getElementById('p_doc').value = p.docId;
   document.getElementById('p_nac').value = p.nacimiento;
+  document.getElementById('p_rh').value = p.rh || '';
   document.getElementById('p_num').value = p.numero;
   document.getElementById('p_pos').value = p.posicion;
   document.getElementById('p_estado').value = p.estado;
@@ -365,6 +369,7 @@ async function savePlayer() {
   const jugador = {
     id: editingId, nombre, docId: document.getElementById('p_doc').value.trim(),
     nacimiento: document.getElementById('p_nac').value, numero,
+    rh: document.getElementById('p_rh').value,
     posicion: document.getElementById('p_pos').value, estado: document.getElementById('p_estado').value,
     cuarenton: document.getElementById('p_cuarenton').checked
   };
