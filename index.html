@@ -471,14 +471,31 @@ async function enVivoCargar() {
   if (!lu) { body.innerHTML = '<p class="muted">Primero confirma la alineación titular en la pestaña Alineación.</p>'; return; }
   const players = await gsCall('getJugadores', STATE.team.id);
   const log = await gsCall('getCambios', matchId, STATE.team.id);
-  const nombreDe = {}; players.forEach(p=>nombreDe[p.id]=p.nombre);
-  const salidos = log.map(c=>c.saleId), entrados = log.map(c=>c.entraId);
-  const disponibles = [...lu.titulares.filter(id=>!salidos.includes(id)), ...entrados.filter(id=>!salidos.includes(id))];
-  const banca = lu.suplentes.filter(id=>!entrados.includes(id));
+  const nombreDe = {}, cuarentonDe = {};
+  players.forEach(p=>{ nombreDe[p.id]=p.nombre; cuarentonDe[p.id]=!!p.cuarenton; });
+
+  // Reproducimos los cambios en orden cronológico para saber quién está en cancha en este momento
+  const eventos = [...log].sort((a,b)=> (a.minuto-b.minuto) || (new Date(a.ts)-new Date(b.ts)));
+  const enCancha = new Set(lu.titulares);
+  const yaEntroAlgunaVez = new Set(); // suplentes que ya usaron su entrada (para bloquear reingreso, salvo cuarentón)
+  eventos.forEach(c => {
+    enCancha.delete(c.saleId);
+    enCancha.add(c.entraId);
+    if (lu.suplentes.includes(c.entraId)) yaEntroAlgunaVez.add(c.entraId);
+  });
+
+  // Sale: cualquiera que esté actualmente en cancha (titular o suplente que entró)
+  const disponibles = [...enCancha];
+
+  // Entra: suplentes que no están en cancha y (nunca han entrado, o son cuarentón y pueden reingresar)
+  const banca = lu.suplentes.filter(id => !enCancha.has(id) && (cuarentonDe[id] || !yaEntroAlgunaVez.has(id)));
+  // Además, un titular cuarentón que ya salió también puede volver a entrar (los titulares normales no)
+  const titularesReingresan = lu.titulares.filter(id => !enCancha.has(id) && cuarentonDe[id]);
+  const puedenEntrar = [...banca, ...titularesReingresan];
   let html = `<div class="card">
     <div class="muted" style="margin-bottom:8px">Registrar cambio</div>
     <select id="ev_out"><option value="">Sale…</option>${disponibles.map(id=>`<option value="${id}">${esc(nombreDe[id]||'—')}</option>`).join('')}</select>
-    <select id="ev_in"><option value="">Entra…</option>${banca.map(id=>`<option value="${id}">${esc(nombreDe[id]||'—')}</option>`).join('')}</select>
+    <select id="ev_in"><option value="">Entra…</option>${puedenEntrar.map(id=>`<option value="${id}">${esc(nombreDe[id]||'—')}${cuarentonDe[id]?' (cuarentón)':''}</option>`).join('')}</select>
     <input id="ev_min" type="number" placeholder="Minuto">
     <button class="btn-primary" onclick="enVivoRegistrar('${matchId}')">Registrar cambio</button>
   </div>
