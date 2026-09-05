@@ -2,6 +2,7 @@
 <html>
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Torneo Sintrainagro</title>
 <meta property="og:title" content="Torneo Sintrainagro">
 <meta property="og:description" content="Ingresa con tu PIN para gestionar tu equipo, jugadores y partidos.">
@@ -12,33 +13,33 @@
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Work+Sans:wght@400;500;600&family=Bebas+Neue&display=swap');
   * { box-sizing: border-box; }
-  body { margin:0; font-family:'Work Sans',system-ui,sans-serif; background:#EEF3ED; color:#152922; }
+  body { margin:0; font-family:'Work Sans',system-ui,sans-serif; background:#EEF3ED; color:#152922; font-size:16px; }
   .bebas { font-family:'Bebas Neue',sans-serif; letter-spacing:.02em; }
   header { background:#123626; color:#F2F5F0; padding:14px 18px; display:flex; align-items:center; justify-content:space-between; position:sticky; top:0; z-index:20; }
-  header .brand { font-size:24px; }
-  header button { background:transparent; border:1px solid #3F7D58; color:#CFE8D8; border-radius:20px; padding:6px 12px; font-size:13px; cursor:pointer; }
+  header .brand { font-size:26px; }
+  header button { background:transparent; border:1px solid #3F7D58; color:#CFE8D8; border-radius:20px; padding:7px 13px; font-size:14px; cursor:pointer; }
   main { max-width:720px; margin:0 auto; padding:16px 14px 90px; }
-  h2.bebas { font-size:26px; margin:0; }
-  .sub { margin:2px 0 14px; font-size:13px; color:#5b6b62; }
+  h2.bebas { font-size:28px; margin:0; }
+  .sub { margin:2px 0 14px; font-size:15px; color:#5b6b62; }
   .card { background:#fff; border-radius:12px; padding:14px; margin-bottom:8px; box-shadow:0 1px 3px rgba(0,0,0,.05); }
-  input, select { width:100%; padding:10px; border-radius:8px; border:1px solid #d8ded8; margin-bottom:8px; font-size:14px; font-family:inherit; }
-  label.chk { display:flex; align-items:center; gap:8px; font-size:14px; margin:10px 0; }
-  .btn-primary { background:#123626; color:#fff; border:none; border-radius:10px; padding:10px 16px; font-size:14px; font-weight:600; cursor:pointer; }
-  .btn-ghost { background:transparent; color:#123626; border:1px solid #c7d2c9; border-radius:10px; padding:10px 16px; font-size:14px; font-weight:600; cursor:pointer; }
-  .btn-add { width:100%; background:#fff; border:1px dashed #9db3a2; border-radius:12px; padding:14px; font-size:14px; font-weight:600; color:#123626; cursor:pointer; }
-  .badge { font-size:11px; font-weight:600; padding:3px 8px; border-radius:20px; margin-right:6px; display:inline-block; }
+  input, select { width:100%; padding:12px; border-radius:8px; border:1px solid #d8ded8; margin-bottom:8px; font-size:16px; font-family:inherit; }
+  label.chk { display:flex; align-items:center; gap:8px; font-size:15px; margin:10px 0; }
+  .btn-primary { background:#123626; color:#fff; border:none; border-radius:10px; padding:12px 18px; font-size:16px; font-weight:600; cursor:pointer; }
+  .btn-ghost { background:transparent; color:#123626; border:1px solid #c7d2c9; border-radius:10px; padding:12px 18px; font-size:16px; font-weight:600; cursor:pointer; }
+  .btn-add { width:100%; background:#fff; border:1px dashed #9db3a2; border-radius:12px; padding:16px; font-size:16px; font-weight:600; color:#123626; cursor:pointer; }
+  .badge { font-size:13px; font-weight:600; padding:4px 10px; border-radius:20px; margin-right:6px; display:inline-block; }
   .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
   .photo { width:56px; height:56px; border-radius:10px; background:#dfe7e0; flex-shrink:0; overflow:hidden; display:flex; align-items:center; justify-content:center; }
   .photo img { width:100%; height:100%; object-fit:cover; }
   .tabbar { position:fixed; bottom:0; left:0; right:0; background:#fff; border-top:1px solid #e2e8e3; display:flex; z-index:20; }
-  .tabbar button { flex:1; border:none; background:transparent; padding:10px 4px 12px; font-size:11px; font-weight:600; color:#8a978d; cursor:pointer; }
+  .tabbar button { flex:1; border:none; background:transparent; padding:10px 4px 12px; font-size:13px; font-weight:600; color:#8a978d; cursor:pointer; }
   .tabbar button.active { color:#123626; }
   .row { display:flex; gap:10px; align-items:center; }
-  .toggle { border:none; border-radius:20px; padding:6px 10px; font-size:12px; font-weight:600; background:#eef1ee; color:#5b6b62; cursor:pointer; }
+  .toggle { border:none; border-radius:20px; padding:8px 12px; font-size:14px; font-weight:600; background:#eef1ee; color:#5b6b62; cursor:pointer; }
   .toggle.on-t { background:#123626; color:#fff; }
   .toggle.on-s { background:#3F7D58; color:#fff; }
-  .muted { color:#8a978d; font-size:13px; }
-  .pin-input { letter-spacing:6px; font-size:22px; text-align:center; font-family:'Bebas Neue',sans-serif; }
+  .muted { color:#8a978d; font-size:15px; }
+  .pin-input { letter-spacing:6px; font-size:26px; text-align:center; font-family:'Bebas Neue',sans-serif; }
 </style>
 </head>
 <body>
