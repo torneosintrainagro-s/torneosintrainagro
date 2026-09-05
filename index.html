@@ -197,11 +197,35 @@ async function regenerarPin(equipoId) {
 }
 
 async function orgCarnetsHtml() {
-  const players = await gsCall('getJugadoresTodos');
-  let html = `<h2 class="bebas">Carnets del torneo</h2><p class="sub">${players.length} jugador(es) registrados en total</p>`;
-  html += '<div class="stack">' + players.map(p => playerCardHtml(p, p.equipoNombre)).join('') + '</div>';
-  if (players.length === 0) html += '<p class="muted">Aún no hay jugadores.</p>';
+  const [teams, players] = [await gsCall('getEquipos'), await gsCall('getJugadoresTodos')];
+  const countDe = {};
+  players.forEach(p => { countDe[p.equipoId] = (countDe[p.equipoId] || 0) + 1; });
+  let html = `<h2 class="bebas">Carnets del torneo</h2><p class="sub">${players.length} jugador(es) registrados en total · elige un equipo para ver sus carnets</p>`;
+  if (teams.length === 0) html += '<p class="muted">Aún no hay equipos inscritos.</p>';
+  teams.forEach(t => {
+    const n = countDe[t.id] || 0;
+    html += `<div class="card row" style="cursor:pointer;align-items:center" onclick="verCarnetsEquipo('${t.id}')">
+      <div style="flex:1">
+        <div style="font-weight:600;font-size:16px">${esc(t.nombre)}</div>
+        <div class="muted">${n} carnet${n === 1 ? '' : 's'}</div>
+      </div>
+      <div class="bebas" style="font-size:26px;color:#123626">${n}</div>
+    </div>`;
+  });
   return html;
+}
+
+async function verCarnetsEquipo(equipoId) {
+  const content = document.getElementById('content');
+  content.innerHTML = '<p class="muted">Cargando…</p>';
+  const [teams, players] = [await gsCall('getEquipos'), await gsCall('getJugadoresTodos')];
+  const team = teams.find(t => t.id === equipoId);
+  const teamPlayers = players.filter(p => p.equipoId === equipoId);
+  let html = `<button class="btn-ghost" onclick="renderOrg()">← Volver a equipos</button>
+    <h2 class="bebas" style="margin-top:12px">Carnets — ${esc(team ? team.nombre : '')}</h2><p class="sub">${teamPlayers.length} jugador(es)</p>`;
+  if (teamPlayers.length === 0) html += '<p class="muted">Este equipo aún no tiene jugadores.</p>';
+  html += '<div class="stack">' + teamPlayers.map(p => playerCardHtml(p)).join('') + '</div>';
+  content.innerHTML = html;
 }
 
 async function orgPartidosHtml() {
