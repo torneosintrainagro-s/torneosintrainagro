@@ -114,7 +114,7 @@ function renderPinGate(errorMsg) {
   document.getElementById('whoami').innerHTML = '';
   app.innerHTML = `<div style="padding-top:24px">
     <h2 class="bebas" style="font-size:34px;margin:0 0 4px">Ingresa tu PIN</h2>
-    <p class="sub">El organizador tiene su PIN. Cada equipo tiene el suyo, distinto e independiente. Pídele el tuyo al organizador si no lo tienes.</p>
+    <p class="sub">El organizador tiene su PIN. Cada equipo tiene el suyo, distinto e independiente. Los árbitros también tienen un PIN propio. Pídele el tuyo al organizador si no lo tienes.</p>
     <div class="card">
       <input id="pinInput" class="pin-input" maxlength="6" inputmode="numeric" placeholder="••••">
       <div style="color:#B3261E;font-size:13px;margin-bottom:8px">${errorMsg ? esc(errorMsg) : ''}</div>
@@ -134,6 +134,10 @@ async function intentarPin() {
     STATE.rol = 'organizador'; STATE.tab = 'equipos';
     document.getElementById('whoami').innerHTML = '<button onclick="cerrarSesion()">Organizador · salir</button>';
     renderOrg();
+  } else if (res.rol === 'arbitro') {
+    STATE.rol = 'arbitro'; STATE.tab = 'tarjetas';
+    document.getElementById('whoami').innerHTML = '<button onclick="cerrarSesion()">Árbitro · salir</button>';
+    renderArbitro();
   } else {
     STATE.rol = 'equipo'; STATE.team = res.equipo; STATE.tab = 'planilla';
     document.getElementById('whoami').innerHTML = `<button onclick="cerrarSesion()">${esc(res.equipo.nombre)} · salir</button>`;
@@ -145,12 +149,13 @@ function cerrarSesion() { STATE = { tab: null, rol: null, team: null }; renderPi
 
 // ================= ORGANIZADOR =================
 async function renderOrg() {
-  const tabs = [['equipos','Equipos'],['carnets','Carnets'],['partidos','Partidos'],['actividad','Actividad']];
+  const tabs = [['equipos','Equipos'],['carnets','Carnets'],['partidos','Partidos'],['tarjetas','Amonestaciones'],['actividad','Actividad']];
   app.innerHTML = '<div id="content"></div>' + tabBarHtml(tabs, STATE.tab, 'renderOrg');
   const content = document.getElementById('content');
   if (STATE.tab === 'equipos') content.innerHTML = await orgEquiposHtml();
   if (STATE.tab === 'carnets') content.innerHTML = await orgCarnetsHtml();
   if (STATE.tab === 'partidos') content.innerHTML = await orgPartidosHtml();
+  if (STATE.tab === 'tarjetas') content.innerHTML = await orgTarjetasHtml();
   if (STATE.tab === 'actividad') content.innerHTML = await actividadHtml();
 }
 
@@ -289,6 +294,51 @@ async function verPartido(matchId) {
   content.innerHTML = `<button class="btn-ghost" onclick="renderOrg()">← Volver a partidos</button>
     <h2 class="bebas" style="margin-top:12px">${esc(m.nombre)}</h2><p class="sub">${esc(m.fecha||'')}</p>` +
     (await blockHtml(teamA)) + (await blockHtml(teamB));
+}
+
+async function orgTarjetasHtml() {
+  const [tarjetas, teams, players, matches] = [await gsCall('getTarjetasTodas'), await gsCall('getEquipos'), await gsCall('getJugadoresTodos'), await gsCall('getPartidos')];
+  const nombreEquipoDe = {}; teams.forEach(t => nombreEquipoDe[t.id] = t.nombre);
+  const nombreJugadorDe = {}; players.forEach(p => nombreJugadorDe[p.id] = '#' + esc(p.numero) + ' ' + esc(p.nombre));
+  const nombrePartidoDe = {}; matches.forEach(m => nombrePartidoDe[m.id] = m.nombre);
+  let html = `<h2 class="bebas">Amonestaciones</h2><p class="sub">Tarjetas y sanciones registradas por los árbitros. Solo se puede eliminar una tarjeta después de marcarla como pagada.</p>`;
+  const ordenadas = [...tarjetas].sort((a,b) => new Date(b.ts) - new Date(a.ts));
+  if (ordenadas.length === 0) html += '<p class="muted">Aún no hay tarjetas registradas.</p>';
+  ordenadas.forEach(t => {
+    const color = t.tipo === 'roja' ? {c:'#B3261E', bg:'#FBEAE9', label:'Roja'} : {c:'#7A4E00', bg:'#FDECC8', label:'Amarilla'};
+    const pagada = t.pagada === true || String(t.pagada).toUpperCase() === 'TRUE';
+    html += `<div class="card">
+      <div class="row" style="align-items:center">
+        <span class="badge" style="color:${color.c};background:${color.bg}">${color.label}</span>
+        <div style="flex:1">
+          <div style="font-weight:600">${nombreJugadorDe[t.jugadorId] || '—'}</div>
+          <div class="muted">${esc(nombreEquipoDe[t.equipoId]||'')} · ${esc(nombrePartidoDe[t.matchId]||'')}</div>
+        </div>
+      </div>
+      ${t.observaciones ? `<div style="margin-top:6px;font-size:14px">${esc(t.observaciones)}</div>` : ''}
+      <div class="row" style="margin-top:10px;align-items:center;gap:8px">
+        ${pagada
+          ? `<span class="badge" style="color:#2E7D46;background:#E3F3E8">Pagada</span><button class="btn-ghost" onclick="orgEliminarTarjeta('${t.id}')">Eliminar</button>`
+          : `<span class="badge" style="color:#8a978d;background:#eef1ee">Pendiente de pago</span><button class="btn-primary" onclick="orgPagarTarjeta('${t.id}')">Marcar como pagada</button>`}
+      </div>
+    </div>`;
+  });
+  return html;
+}
+
+async function orgPagarTarjeta(id) {
+  await gsCall('marcarTarjetaPagada', id);
+  renderOrg();
+}
+
+async function orgEliminarTarjeta(id) {
+  if (!confirm('¿Eliminar esta tarjeta ya pagada? No se puede deshacer.')) return;
+  try {
+    await gsCall('eliminarTarjeta', id);
+  } catch (e) {
+    alert(e.message);
+  }
+  renderOrg();
 }
 
 async function actividadHtml() {
@@ -539,6 +589,101 @@ async function enVivoRegistrar(matchId) {
   const m = matches.find(x=>x.id===matchId);
   await gsCall('addCambio', matchId, STATE.team.id, outId, inId, Number(minuto), STATE.team.nombre, m.nombre, nombreDe[outId], nombreDe[inId]);
   enVivoCargar();
+}
+
+// ================= ÁRBITRO =================
+async function renderArbitro() {
+  app.innerHTML = '<div id="content"></div>';
+  const content = document.getElementById('content');
+  content.innerHTML = await arbitroHtml();
+}
+
+async function arbitroHtml() {
+  const matches = await gsCall('getPartidos');
+  let html = `<h2 class="bebas">Amonestaciones</h2><p class="sub">Elige el partido para registrar tarjetas y sanciones.</p>
+    <select id="ar_match" onchange="arbitroCargarPartido()"><option value="">Elige un partido…</option>${matches.map(m=>`<option value="${m.id}">${esc(m.nombre)}${m.fecha?' · '+esc(m.fecha):''}</option>`).join('')}</select>
+    <div id="ar_body"></div>`;
+  return html;
+}
+
+async function arbitroCargarPartido() {
+  const matchId = document.getElementById('ar_match').value;
+  const body = document.getElementById('ar_body');
+  if (!matchId) { body.innerHTML = ''; return; }
+  body.innerHTML = '<p class="muted">Cargando…</p>';
+  const [matches, teams] = [await gsCall('getPartidos'), await gsCall('getEquipos')];
+  const m = matches.find(x => x.id === matchId);
+  const teamA = teams.find(t => t.id === m.equipoA), teamB = teams.find(t => t.id === m.equipoB);
+  window.__arMatch = m; window.__arTeams = { a: teamA, b: teamB };
+  await arbitroRedibujar();
+}
+
+async function arbitroRedibujar() {
+  const m = window.__arMatch, teamA = window.__arTeams.a, teamB = window.__arTeams.b;
+  const body = document.getElementById('ar_body');
+  const [tarjetas, playersA, playersB] = [await gsCall('getTarjetas', m.id), await gsCall('getJugadores', teamA.id), await gsCall('getJugadores', teamB.id)];
+  const nombreEquipoDe = {}; [teamA, teamB].forEach(t => nombreEquipoDe[t.id] = t.nombre);
+  const nombreJugadorDe = {}; [...playersA, ...playersB].forEach(p => nombreJugadorDe[p.id] = '#' + esc(p.numero) + ' ' + esc(p.nombre));
+
+  let html = `<div class="card">
+    <div class="muted" style="margin-bottom:8px">Registrar amonestación</div>
+    <select id="ar_equipo" onchange="arbitroCargarJugadores()">
+      <option value="">Elige el equipo…</option>
+      <option value="${teamA.id}">${esc(teamA.nombre)}</option>
+      <option value="${teamB.id}">${esc(teamB.nombre)}</option>
+    </select>
+    <select id="ar_jugador"><option value="">Elige el jugador…</option></select>
+    <select id="ar_tipo">
+      <option value="amarilla">Tarjeta amarilla</option>
+      <option value="roja">Tarjeta roja</option>
+    </select>
+    <textarea id="ar_obs" rows="3" placeholder="Observaciones (motivo, sanción, suspensión, etc.)" style="width:100%;padding:12px;border-radius:8px;border:1px solid #d8ded8;font-family:inherit;font-size:16px;margin-bottom:8px"></textarea>
+    <button class="btn-primary" onclick="arbitroRegistrar()">Registrar tarjeta</button>
+  </div>
+  <div class="muted" style="margin:14px 0 6px">Tarjetas de este partido</div>`;
+  if (tarjetas.length === 0) html += '<p class="muted">Aún no hay tarjetas registradas en este partido.</p>';
+  tarjetas.slice().reverse().forEach(t => { html += tarjetaCardHtml(t, nombreEquipoDe, nombreJugadorDe); });
+  body.innerHTML = html;
+}
+
+async function arbitroCargarJugadores() {
+  const equipoId = document.getElementById('ar_equipo').value;
+  const sel = document.getElementById('ar_jugador');
+  if (!equipoId) { sel.innerHTML = '<option value="">Elige el jugador…</option>'; return; }
+  const players = await gsCall('getJugadores', equipoId);
+  sel.innerHTML = '<option value="">Elige el jugador…</option>' + players.map(p=>`<option value="${p.id}">#${esc(p.numero)} ${esc(p.nombre)}</option>`).join('');
+}
+
+async function arbitroRegistrar() {
+  const m = window.__arMatch, teams = window.__arTeams;
+  const equipoId = document.getElementById('ar_equipo').value;
+  const jugadorId = document.getElementById('ar_jugador').value;
+  const tipo = document.getElementById('ar_tipo').value;
+  const obs = document.getElementById('ar_obs').value.trim();
+  if (!equipoId || !jugadorId) return;
+  const team = (teams.a.id === equipoId) ? teams.a : teams.b;
+  const players = await gsCall('getJugadores', equipoId);
+  const jugador = players.find(p => p.id === jugadorId);
+  await gsCall('addTarjeta', m.id, equipoId, jugadorId, tipo, obs, team.nombre, jugador ? jugador.nombre : '', m.nombre);
+  await arbitroRedibujar();
+}
+
+function tarjetaCardHtml(t, nombreEquipoDe, nombreJugadorDe) {
+  const color = t.tipo === 'roja' ? {c:'#B3261E', bg:'#FBEAE9', label:'Roja'} : {c:'#7A4E00', bg:'#FDECC8', label:'Amarilla'};
+  const pagada = t.pagada === true || String(t.pagada).toUpperCase() === 'TRUE';
+  return `<div class="card">
+    <div class="row" style="align-items:center">
+      <span class="badge" style="color:${color.c};background:${color.bg}">${color.label}</span>
+      <div style="flex:1">
+        <div style="font-weight:600">${nombreJugadorDe[t.jugadorId] || '—'}</div>
+        <div class="muted">${esc(nombreEquipoDe[t.equipoId]||'')}</div>
+      </div>
+    </div>
+    ${t.observaciones ? `<div style="margin-top:6px;font-size:14px">${esc(t.observaciones)}</div>` : ''}
+    <div style="margin-top:8px">${pagada
+      ? '<span class="badge" style="color:#2E7D46;background:#E3F3E8">Pagada</span>'
+      : '<span class="badge" style="color:#8a978d;background:#eef1ee">Pendiente de pago</span>'}</div>
+  </div>`;
 }
 
 renderPinGate();
