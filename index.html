@@ -632,7 +632,9 @@ async function arbitroRedibujar() {
       <option value="${teamA.id}">${esc(teamA.nombre)}</option>
       <option value="${teamB.id}">${esc(teamB.nombre)}</option>
     </select>
-    <select id="ar_jugador"><option value="">Elige el jugador…</option></select>
+    <div class="muted" style="margin:4px 0 6px">Jugador</div>
+    <input type="hidden" id="ar_jugador" value="">
+    <div id="ar_jugador_lista" class="muted" style="margin-bottom:10px">Elige primero el equipo…</div>
     <select id="ar_tipo">
       <option value="amarilla">Tarjeta amarilla</option>
       <option value="roja">Tarjeta roja</option>
@@ -648,10 +650,26 @@ async function arbitroRedibujar() {
 
 async function arbitroCargarJugadores() {
   const equipoId = document.getElementById('ar_equipo').value;
-  const sel = document.getElementById('ar_jugador');
-  if (!equipoId) { sel.innerHTML = '<option value="">Elige el jugador…</option>'; return; }
+  const lista = document.getElementById('ar_jugador_lista');
+  document.getElementById('ar_jugador').value = '';
+  if (!equipoId) { lista.className = 'muted'; lista.innerHTML = 'Elige primero el equipo…'; return; }
   const players = await gsCall('getJugadores', equipoId);
-  sel.innerHTML = '<option value="">Elige el jugador…</option>' + players.map(p=>`<option value="${p.id}">#${esc(p.numero)} ${esc(p.nombre)}</option>`).join('');
+  lista.className = 'stack';
+  if (players.length === 0) { lista.className = 'muted'; lista.innerHTML = 'Este equipo no tiene jugadores registrados.'; return; }
+  lista.innerHTML = players.map(p => `<div class="card row" id="arp_${p.id}" style="cursor:pointer;align-items:center;padding:8px" onclick="arbitroSeleccionarJugador('${p.id}')">
+    <div class="photo" style="width:44px;height:44px">${p.fotoUrl ? `<img src="${esc(p.fotoUrl)}">` : ''}</div>
+    <div style="flex:1">
+      <div style="font-weight:600;font-size:14px">${esc(p.nombre)}</div>
+      <div class="muted">#${esc(p.numero)} · ${esc(p.posicion)}</div>
+    </div>
+  </div>`).join('');
+}
+
+function arbitroSeleccionarJugador(id) {
+  document.getElementById('ar_jugador').value = id;
+  document.querySelectorAll('#ar_jugador_lista .card').forEach(el => {
+    el.style.border = el.id === 'arp_' + id ? '2px solid #123626' : '1px solid transparent';
+  });
 }
 
 async function arbitroRegistrar() {
