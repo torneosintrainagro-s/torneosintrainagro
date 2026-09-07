@@ -169,6 +169,8 @@ async function orgEquiposHtml() {
   const [teams, players] = [await gsCall('getEquipos'), await gsCall('getJugadoresTodos')];
   const countDe = {};
   players.forEach(p => { countDe[p.equipoId] = (countDe[p.equipoId] || 0) + 1; });
+  window.__teamsData = {};
+  teams.forEach(t => { window.__teamsData[t.id] = Object.assign({}, t, { jugadores: countDe[t.id] || 0 }); });
   let html = `<h2 class="bebas">Equipos del torneo</h2><p class="sub">${teams.length} equipo(s) inscrito(s) — agrega los que quieras, sin límite. El PIN de cada equipo es independiente: compártelo solo con su delegado.</p>`;
   teams.forEach(t => {
     const n = countDe[t.id] || 0;
@@ -180,23 +182,75 @@ async function orgEquiposHtml() {
         <div class="bebas" style="font-size:20px;letter-spacing:3px">PIN ${esc(t.pin)}</div>
         <button class="btn-ghost" onclick="regenerarPin('${t.id}')">Generar PIN nuevo</button>
       </div>
+      <div class="row" style="margin-top:8px;gap:8px">
+        <button class="btn-ghost" onclick="editarEquipoForm('${t.id}')">Editar</button>
+        <button class="btn-ghost" style="color:#B3261E;border-color:#f3c9c5" onclick="confirmarEliminarEquipo('${t.id}')">Eliminar</button>
+      </div>
     </div>`;
   });
   html += `<div class="card" id="teamForm" style="display:none">
+    <div class="muted" id="teamFormTitle" style="margin-bottom:6px">Nuevo equipo</div>
+    <input type="hidden" id="t_id" value="">
     <input id="t_nombre" placeholder="Nombre del equipo">
     <input id="t_delegado" placeholder="Nombre del delegado">
     <input id="t_dt" placeholder="Nombre del técnico/DT">
     <button class="btn-primary" onclick="submitTeam()">Guardar equipo</button>
-    <button class="btn-ghost" onclick="document.getElementById('teamForm').style.display='none'; document.getElementById('addTeamBtn').style.display='block';">Cancelar</button>
+    <button class="btn-ghost" onclick="cerrarTeamForm()">Cancelar</button>
   </div>
-  <button class="btn-add" id="addTeamBtn" onclick="document.getElementById('teamForm').style.display='block'; this.style.display='none';">+ Agregar equipo</button>`;
+  <button class="btn-add" id="addTeamBtn" onclick="abrirTeamForm()">+ Agregar equipo</button>`;
   return html;
+}
+
+function abrirTeamForm() {
+  document.getElementById('teamFormTitle').textContent = 'Nuevo equipo';
+  document.getElementById('t_id').value = '';
+  document.getElementById('t_nombre').value = '';
+  document.getElementById('t_delegado').value = '';
+  document.getElementById('t_dt').value = '';
+  document.getElementById('teamForm').style.display = 'block';
+  document.getElementById('addTeamBtn').style.display = 'none';
+}
+
+function cerrarTeamForm() {
+  document.getElementById('teamForm').style.display = 'none';
+  document.getElementById('addTeamBtn').style.display = 'block';
+}
+
+function editarEquipoForm(equipoId) {
+  const t = window.__teamsData[equipoId];
+  if (!t) return;
+  document.getElementById('teamFormTitle').textContent = 'Editar equipo (el PIN no cambia)';
+  document.getElementById('t_id').value = t.id;
+  document.getElementById('t_nombre').value = t.nombre || '';
+  document.getElementById('t_delegado').value = t.delegado || '';
+  document.getElementById('t_dt').value = t.dt || '';
+  document.getElementById('teamForm').style.display = 'block';
+  document.getElementById('addTeamBtn').style.display = 'none';
+  document.getElementById('teamForm').scrollIntoView({ behavior: 'smooth' });
+}
+
+async function confirmarEliminarEquipo(equipoId) {
+  const t = window.__teamsData[equipoId];
+  if (!t) return;
+  const msg = t.jugadores > 0
+    ? `¿Eliminar el equipo "${t.nombre}"? Esto también borrará su planilla completa (${t.jugadores} jugador${t.jugadores === 1 ? '' : 'es'}). Esta acción no se puede deshacer.`
+    : `¿Eliminar el equipo "${t.nombre}"? Esta acción no se puede deshacer.`;
+  if (!confirm(msg)) return;
+  await gsCall('eliminarEquipo', equipoId);
+  renderOrg();
 }
 
 async function submitTeam() {
   const nombre = document.getElementById('t_nombre').value.trim();
   if (!nombre) return;
-  const r = await gsCall('addEquipo', nombre, document.getElementById('t_delegado').value.trim(), document.getElementById('t_dt').value.trim());
+  const id = document.getElementById('t_id').value;
+  const delegado = document.getElementById('t_delegado').value.trim();
+  const dt = document.getElementById('t_dt').value.trim();
+  if (id) {
+    await gsCall('editarEquipo', id, nombre, delegado, dt);
+  } else {
+    await gsCall('addEquipo', nombre, delegado, dt);
+  }
   renderOrg();
 }
 
