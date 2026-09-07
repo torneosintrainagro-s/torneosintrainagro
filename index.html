@@ -166,12 +166,16 @@ function tabBarHtml(tabs, active, renderFn) {
 }
 
 async function orgEquiposHtml() {
-  const teams = await gsCall('getEquipos');
+  const [teams, players] = [await gsCall('getEquipos'), await gsCall('getJugadoresTodos')];
+  const countDe = {};
+  players.forEach(p => { countDe[p.equipoId] = (countDe[p.equipoId] || 0) + 1; });
   let html = `<h2 class="bebas">Equipos del torneo</h2><p class="sub">${teams.length} equipo(s) inscrito(s) — agrega los que quieras, sin límite. El PIN de cada equipo es independiente: compártelo solo con su delegado.</p>`;
   teams.forEach(t => {
+    const n = countDe[t.id] || 0;
     html += `<div class="card">
       <div style="font-weight:600;font-size:16px">${esc(t.nombre)}</div>
       <div class="muted">Delegado: ${esc(t.delegado)||'—'} · DT: ${esc(t.dt)||'—'}</div>
+      <div class="muted">${n} jugador${n===1?'':'es'} inscrito${n===1?'':'s'}</div>
       <div class="row" style="margin-top:8px">
         <div class="bebas" style="font-size:20px;letter-spacing:3px">PIN ${esc(t.pin)}</div>
         <button class="btn-ghost" onclick="regenerarPin('${t.id}')">Generar PIN nuevo</button>
@@ -383,7 +387,7 @@ async function renderDelegate() {
 
 async function planillaHtml() {
   const players = await gsCall('getJugadores', STATE.team.id);
-  let html = `<h2 class="bebas">Planilla — ${esc(STATE.team.nombre)}</h2><p class="sub">Delegado: ${esc(STATE.team.delegado)||'—'} · DT: ${esc(STATE.team.dt)||'—'}</p>`;
+  let html = `<h2 class="bebas">Planilla — ${esc(STATE.team.nombre)}</h2><p class="sub">${players.length} jugador${players.length===1?'':'es'} · Delegado: ${esc(STATE.team.delegado)||'—'} · DT: ${esc(STATE.team.dt)||'—'}</p>`;
   players.forEach(p => {
     html += `<div class="card row">
       <div class="photo ${p.fotoUrl?'clickable':''}" style="width:64px;height:64px" ${p.fotoUrl?`onclick="verFoto('${esc(p.fotoUrl)}')"`:''}>${p.fotoUrl?`<img src="${esc(p.fotoUrl)}">`:''}</div>
