@@ -40,6 +40,7 @@
   .tabbar button.active { color:#123626; }
   .row { display:flex; gap:10px; align-items:center; }
   .toggle { border:none; border-radius:20px; padding:8px 12px; font-size:14px; font-weight:600; background:#eef1ee; color:#5b6b62; cursor:pointer; }
+  .toggle:disabled { opacity:.4; cursor:not-allowed; }
   .toggle.on-t { background:#123626; color:#fff; }
   .toggle.on-s { background:#3F7D58; color:#fff; }
   .muted { color:#8a978d; font-size:15px; }
@@ -261,18 +262,23 @@ async function regenerarPin(equipoId) {
 
 async function orgCarnetsHtml() {
   const [teams, players] = [await gsCall('getEquipos'), await gsCall('getJugadoresTodos')];
-  const countDe = {};
-  players.forEach(p => { countDe[p.equipoId] = (countDe[p.equipoId] || 0) + 1; });
+  const countDe = {}, pendDe = {};
+  players.forEach(p => {
+    countDe[p.equipoId] = (countDe[p.equipoId] || 0) + 1;
+    const autorizado = p.autorizado === true || String(p.autorizado).toUpperCase() === 'TRUE';
+    if (!autorizado) pendDe[p.equipoId] = (pendDe[p.equipoId] || 0) + 1;
+  });
   let html = `<h2 class="bebas">Carnets del torneo</h2><p class="sub">${players.length} jugador(es) registrados en total · elige un equipo para ver sus carnets</p>`;
   if (teams.length === 0) html += '<p class="muted">Aún no hay equipos inscritos.</p>';
   teams.forEach(t => {
     const n = countDe[t.id] || 0;
+    const pend = pendDe[t.id] || 0;
     html += `<div class="card row" style="cursor:pointer;align-items:center" onclick="verCarnetsEquipo('${t.id}')">
       <div style="flex:1">
         <div style="font-weight:600;font-size:16px">${esc(t.nombre)}</div>
-        <div class="muted">${n} carnet${n === 1 ? '' : 's'}</div>
+        <div class="muted">${n} carnet${n === 1 ? '' : 's'}${pend > 0 ? ` · ${pend} pendiente${pend === 1 ? '' : 's'} de autorizar` : ''}</div>
       </div>
-      <div class="bebas" style="font-size:26px;color:#123626">${n}</div>
+      <div class="bebas" style="font-size:26px;color:${pend > 0 ? '#B8860B' : '#123626'}">${n}</div>
     </div>`;
   });
   return html;
@@ -281,14 +287,26 @@ async function orgCarnetsHtml() {
 async function verCarnetsEquipo(equipoId) {
   const content = document.getElementById('content');
   content.innerHTML = '<p class="muted">Cargando…</p>';
+  window.__currentOrgTeamId = equipoId;
   const [teams, players] = [await gsCall('getEquipos'), await gsCall('getJugadoresTodos')];
   const team = teams.find(t => t.id === equipoId);
   const teamPlayers = players.filter(p => p.equipoId === equipoId);
   let html = `<button class="btn-ghost" onclick="renderOrg()">← Volver a equipos</button>
     <h2 class="bebas" style="margin-top:12px">Carnets — ${esc(team ? team.nombre : '')}</h2><p class="sub">${teamPlayers.length} jugador(es)</p>`;
   if (teamPlayers.length === 0) html += '<p class="muted">Este equipo aún no tiene jugadores.</p>';
-  html += '<div class="stack">' + teamPlayers.map(p => playerCardHtml(p)).join('') + '</div>';
+  html += '<div class="stack">' + teamPlayers.map(p => playerCardHtml(p, null, true)).join('') + '</div>';
   content.innerHTML = html;
+}
+
+async function orgAutorizarJugador(id) {
+  await gsCall('autorizarJugador', id);
+  if (window.__currentOrgTeamId) verCarnetsEquipo(window.__currentOrgTeamId);
+}
+
+async function orgRevocarAutorizacion(id) {
+  if (!confirm('¿Revocar la autorización de este jugador? No podrá usarse en alineaciones hasta que se autorice de nuevo.')) return;
+  await gsCall('revocarAutorizacion', id);
+  if (window.__currentOrgTeamId) verCarnetsEquipo(window.__currentOrgTeamId);
 }
 
 async function orgPartidosHtml() {
@@ -409,8 +427,9 @@ async function actividadHtml() {
   return html;
 }
 
-function playerCardHtml(p, equipoNombre) {
+function playerCardHtml(p, equipoNombre, orgView) {
   const st = STATUS[p.estado] || STATUS.habilitado;
+  const autorizado = p.autorizado === true || String(p.autorizado).toUpperCase() === 'TRUE';
   return `<div class="card" style="padding:12px">
     <div class="row">
       <div class="photo ${p.fotoUrl?'clickable':''}" ${p.fotoUrl?`onclick="verFoto('${esc(p.fotoUrl)}')"`:''}>${p.fotoUrl ? `<img src="${esc(p.fotoUrl)}">` : ''}</div>
@@ -424,7 +443,11 @@ function playerCardHtml(p, equipoNombre) {
       <span class="badge" style="color:${st.color};background:${st.bg}">${st.label}</span>
       ${p.rh ? `<span class="badge" style="color:#B3261E;background:#FBEAE9">RH ${esc(p.rh)}</span>` : ''}
       ${p.cuarenton ? '<span class="badge" style="color:#7A4E00;background:#FDECC8">Cuarentón</span>' : ''}
+      ${p.refuerzo ? '<span class="badge" style="color:#0B5FA5;background:#E3EEFB">Refuerzo</span>' : ''}
+      ${autorizado ? '<span class="badge" style="color:#2E7D46;background:#E3F3E8">Autorizado</span>' : '<span class="badge" style="color:#B8860B;background:#FBF3DC">Pendiente de autorización</span>'}
     </div>
+    ${orgView && !autorizado ? `<button class="btn-primary" style="margin-top:10px;width:100%" onclick="orgAutorizarJugador('${p.id}')">Autorizar jugador</button>` : ''}
+    ${orgView && autorizado ? `<button class="btn-ghost" style="margin-top:10px;width:100%" onclick="orgRevocarAutorizacion('${p.id}')">Revocar autorización</button>` : ''}
   </div>`;
 }
 
@@ -443,11 +466,13 @@ async function planillaHtml() {
   const players = await gsCall('getJugadores', STATE.team.id);
   let html = `<h2 class="bebas">Planilla — ${esc(STATE.team.nombre)}</h2><p class="sub">${players.length} jugador${players.length===1?'':'es'} · Delegado: ${esc(STATE.team.delegado)||'—'} · DT: ${esc(STATE.team.dt)||'—'}</p>`;
   players.forEach(p => {
+    const autorizado = p.autorizado === true || String(p.autorizado).toUpperCase() === 'TRUE';
     html += `<div class="card row">
       <div class="photo ${p.fotoUrl?'clickable':''}" style="width:64px;height:64px" ${p.fotoUrl?`onclick="verFoto('${esc(p.fotoUrl)}')"`:''}>${p.fotoUrl?`<img src="${esc(p.fotoUrl)}">`:''}</div>
       <div style="flex:1" onclick="editPlayer('${p.id}')">
-        <div style="font-weight:600;font-size:14px">#${esc(p.numero)} ${esc(p.nombre)}${p.cuarenton?' · Cuarentón':''}</div>
+        <div style="font-weight:600;font-size:14px">#${esc(p.numero)} ${esc(p.nombre)}${p.cuarenton?' · Cuarentón':''}${p.refuerzo?' · Refuerzo':''}</div>
         <div class="muted">${esc(p.posicion)} · ${STATUS[p.estado]?.label||''}</div>
+        <div style="margin-top:4px">${autorizado ? '<span class="badge" style="color:#2E7D46;background:#E3F3E8">Autorizado</span>' : '<span class="badge" style="color:#B8860B;background:#FBF3DC">Pendiente de autorización</span>'}</div>
       </div>
       <button class="btn-ghost" onclick="editPlayer('${p.id}')">Editar</button>
       <button class="btn-ghost" style="color:#B3261E" onclick="removePlayer('${p.id}')">Eliminar</button>
@@ -468,6 +493,7 @@ async function planillaHtml() {
     <select id="p_pos">${POSITIONS.map(x=>`<option>${x}</option>`).join('')}</select>
     <select id="p_estado">${Object.entries(STATUS).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join('')}</select>
     <label class="chk"><input type="checkbox" id="p_cuarenton"> Jugador cuarentón (mayor de 40)</label>
+    <label class="chk"><input type="checkbox" id="p_refuerzo"> Jugador de refuerzo</label>
     <div id="p_error" style="color:#B3261E;font-size:13px;margin-bottom:8px"></div>
     <button class="btn-primary" onclick="savePlayer()">Guardar</button>
     <button class="btn-ghost" onclick="document.getElementById('playerForm').style.display='none'; document.getElementById('addPlayerBtn').style.display='block';">Cancelar</button>
@@ -480,7 +506,7 @@ function showPlayerForm() {
   editingId = null; currentPhoto = null;
   ['p_nombre','p_doc','p_num'].forEach(id => document.getElementById(id).value='');
   document.getElementById('p_nac').value=''; document.getElementById('p_rh').value=''; document.getElementById('p_pos').selectedIndex=0;
-  document.getElementById('p_estado').value='habilitado'; document.getElementById('p_cuarenton').checked=false;
+  document.getElementById('p_estado').value='habilitado'; document.getElementById('p_cuarenton').checked=false; document.getElementById('p_refuerzo').checked=false;
   document.getElementById('photoPreview').innerHTML=''; document.getElementById('p_error').innerText='';
   document.getElementById('playerForm').style.display='block';
   document.getElementById('addPlayerBtn').style.display='none';
@@ -497,6 +523,7 @@ async function editPlayer(id) {
   document.getElementById('p_pos').value = p.posicion;
   document.getElementById('p_estado').value = p.estado;
   document.getElementById('p_cuarenton').checked = !!p.cuarenton;
+  document.getElementById('p_refuerzo').checked = !!p.refuerzo;
   document.getElementById('photoPreview').innerHTML = p.fotoUrl ? `<img src="${esc(p.fotoUrl)}">` : '';
   document.getElementById('p_error').innerText = '';
   document.getElementById('playerForm').style.display = 'block';
@@ -511,16 +538,19 @@ async function savePlayer() {
   const nombre = document.getElementById('p_nombre').value.trim();
   const numero = document.getElementById('p_num').value;
   if (!nombre || !numero) { document.getElementById('p_error').innerText = 'Nombre y número de camiseta son obligatorios.'; return; }
+  const esNuevo = !editingId;
   const jugador = {
     id: editingId, nombre, docId: document.getElementById('p_doc').value.trim(),
     nacimiento: document.getElementById('p_nac').value, numero,
     rh: document.getElementById('p_rh').value,
     posicion: document.getElementById('p_pos').value, estado: document.getElementById('p_estado').value,
-    cuarenton: document.getElementById('p_cuarenton').checked
+    cuarenton: document.getElementById('p_cuarenton').checked,
+    refuerzo: document.getElementById('p_refuerzo').checked
   };
   try {
-    await gsCall('guardarJugador', STATE.team.id, jugador, currentPhoto);
+    await gsCall('guardarJugador', STATE.team.id, jugador, currentPhoto, STATE.team.nombre);
     renderDelegate();
+    if (esNuevo) alert('Jugador guardado. Queda "Pendiente de autorización" hasta que el organizador lo autorice — solo entonces podrás alinearlo en un partido.');
   } catch (e) {
     document.getElementById('p_error').innerText = (e && e.message) ? e.message : 'No se pudo guardar.';
   }
@@ -562,10 +592,11 @@ function alineacionRedibujar(matchId, confirmed) {
   if (players.length === 0) html += '<p class="muted">Agrega jugadores en Planilla primero.</p>';
   players.forEach(p => {
     const isT = alTitulares.includes(p.id), isS = alSuplentes.includes(p.id);
+    const autorizado = p.autorizado === true || String(p.autorizado).toUpperCase() === 'TRUE';
     html += `<div class="card row" style="padding:10px">
-      <div style="flex:1;font-size:14px">#${esc(p.numero)} ${esc(p.nombre)} <span class="muted">· ${esc(p.posicion)}</span></div>
-      <button class="toggle ${isT?'on-t':''}" onclick="alToggle('t','${p.id}','${matchId}',${confirmed})">Titular</button>
-      <button class="toggle ${isS?'on-s':''}" onclick="alToggle('s','${p.id}','${matchId}',${confirmed})">Suplente</button>
+      <div style="flex:1;font-size:14px">#${esc(p.numero)} ${esc(p.nombre)} <span class="muted">· ${esc(p.posicion)}</span>${!autorizado?'<div class="muted" style="color:#B8860B">Pendiente de autorización del organizador</div>':''}</div>
+      <button class="toggle ${isT?'on-t':''}" ${autorizado?'':'disabled'} onclick="alToggle('t','${p.id}','${matchId}',${confirmed})">Titular</button>
+      <button class="toggle ${isS?'on-s':''}" ${autorizado?'':'disabled'} onclick="alToggle('s','${p.id}','${matchId}',${confirmed})">Suplente</button>
     </div>`;
   });
   html += `<button class="btn-primary" style="margin-top:8px" onclick="alConfirmar('${matchId}')">${confirmed?'Actualizar alineación confirmada':'Confirmar alineación'}</button>`;
@@ -573,6 +604,9 @@ function alineacionRedibujar(matchId, confirmed) {
   body.innerHTML = html;
 }
 function alToggle(kind, id, matchId, confirmed) {
+  const jp = (window.__alPlayers || []).find(x => x.id === id);
+  const autorizado = jp && (jp.autorizado === true || String(jp.autorizado).toUpperCase() === 'TRUE');
+  if (!autorizado) return;
   if (kind === 't') {
     if (alTitulares.includes(id)) alTitulares = alTitulares.filter(x=>x!==id);
     else if (!alSuplentes.includes(id) && alTitulares.length < 11) alTitulares.push(id);
