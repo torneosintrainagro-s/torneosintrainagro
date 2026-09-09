@@ -606,13 +606,94 @@ function playerCardHtml(p, equipoNombre, orgView) {
 
 // ================= DELEGADO =================
 async function renderDelegate() {
-  const tabs = [['planilla','Planilla'],['carnets','Carnets'],['alineacion','Alineación'],['vivo','En vivo']];
+  const tabs = [['planilla','Planilla'],['carnets','Carnets'],['partidos','Partidos'],['alineacion','Alineación'],['vivo','En vivo']];
   app.innerHTML = '<div id="content"></div>' + tabBarHtml(tabs, STATE.tab, 'renderDelegate');
   const content = document.getElementById('content');
   if (STATE.tab === 'planilla') content.innerHTML = await planillaHtml();
   if (STATE.tab === 'carnets') content.innerHTML = await delegateCarnetsHtml();
+  if (STATE.tab === 'partidos') content.innerHTML = await delegatePartidosHtml();
   if (STATE.tab === 'alineacion') await alineacionRender(content);
   if (STATE.tab === 'vivo') await enVivoRender(content);
+}
+
+async function delegatePartidosHtml() {
+  const [matches, teams] = [await gsCall('getPartidos'), await gsCall('getEquipos')];
+  const misPartidos = matches.filter(m => m.equipoA === STATE.team.id || m.equipoB === STATE.team.id)
+    .sort((a, b) => (Number(a.jornada) || 0) - (Number(b.jornada) || 0));
+  const nombreEquipoDe = {}; teams.forEach(t => nombreEquipoDe[t.id] = t.nombre);
+  let html = `<h2 class="bebas">Partidos — ${esc(STATE.team.nombre)}</h2><p class="sub">Elige una jornada para ver el resultado y los detalles registrados por el árbitro.</p>`;
+  if (misPartidos.length === 0) html += '<p class="muted">Aún no tienes partidos programados.</p>';
+  misPartidos.forEach(m => {
+    const rival = m.equipoA === STATE.team.id ? nombreEquipoDe[m.equipoB] : nombreEquipoDe[m.equipoA];
+    const tieneResultado = m.golesA !== '' && m.golesA !== undefined && m.golesA !== null;
+    let marcador = '';
+    if (tieneResultado) {
+      const misGoles = m.equipoA === STATE.team.id ? m.golesA : m.golesB;
+      const golesRival = m.equipoA === STATE.team.id ? m.golesB : m.golesA;
+      marcador = `${esc(misGoles)} - ${esc(golesRival)}`;
+    }
+    html += `<div class="card row" style="cursor:pointer;align-items:center" onclick="verPartidoDelegado('${m.id}')">
+      <div style="flex:1">
+        <div style="font-weight:600">${esc(m.nombre)}</div>
+        <div class="muted">vs ${esc(rival||'—')}${m.fecha?' · '+esc(m.fecha):''}</div>
+      </div>
+      ${tieneResultado ? `<div class="bebas" style="font-size:20px;color:#123626">${marcador}</div>` : '<span class="badge" style="color:#8a978d;background:#eef1ee">Sin jugar</span>'}
+    </div>`;
+  });
+  return html;
+}
+
+async function verPartidoDelegado(matchId) {
+  const content = document.getElementById('content');
+  content.innerHTML = '<p class="muted">Cargando…</p>';
+  const [matches, teams] = [await gsCall('getPartidos'), await gsCall('getEquipos')];
+  const m = matches.find(x => x.id === matchId);
+  const teamA = teams.find(t => t.id === m.equipoA), teamB = teams.find(t => t.id === m.equipoB);
+  const [playersA, playersB, goles] = [await gsCall('getJugadores', teamA.id), await gsCall('getJugadores', teamB.id), await gsCall('getGoles', matchId)];
+  const nombreJugadorDe = {}; [...playersA, ...playersB].forEach(p => nombreJugadorDe[p.id] = p.nombre);
+  const tieneResultado = m.golesA !== '' && m.golesA !== undefined && m.golesA !== null;
+  let resultadoHtml = `<div class="card" style="text-align:center">`;
+  if (tieneResultado) {
+    resultadoHtml += `<div class="row" style="justify-content:center;align-items:center;gap:16px">
+      <div style="flex:1;text-align:right;font-weight:600">${esc(teamA.nombre)}</div>
+      <div class="bebas" style="font-size:32px;color:#123626">${esc(m.golesA)} - ${esc(m.golesB)}</div>
+      <div style="flex:1;text-align:left;font-weight:600">${esc(teamB.nombre)}</div>
+    </div>`;
+  } else {
+    resultadoHtml += '<p class="muted">El árbitro aún no registra el resultado de este partido.</p>';
+  }
+  const golesTeam = (equipoId) => goles.filter(g => g.equipoId === equipoId).map(g => `${esc(nombreJugadorDe[g.jugadorId]||'—')} (${esc(g.goles)})`).join(', ');
+  if (goles.length) {
+    resultadoHtml += `<div style="margin-top:10px;text-align:left;border-top:1px solid #eef1ee;padding-top:8px">
+      <div class="muted">Goles ${esc(teamA.nombre)}</div><div style="margin-bottom:6px">${golesTeam(teamA.id)||'—'}</div>
+      <div class="muted">Goles ${esc(teamB.nombre)}</div><div>${golesTeam(teamB.id)||'—'}</div>
+    </div>`;
+  }
+  resultadoHtml += '</div>';
+  const blockHtml = async (team) => {
+    const players = await gsCall('getJugadores', team.id);
+    const nombreDe = {}; players.forEach(p => nombreDe[p.id] = p.nombre);
+    const lu = await gsCall('getAlineacion', matchId, team.id);
+    const cambios = await gsCall('getCambios', matchId, team.id);
+    let h = `<div class="card"><div style="font-weight:600;margin-bottom:6px">${esc(team.nombre)}</div>`;
+    if (!lu) { h += '<p class="muted">Alineación no confirmada.</p>'; }
+    else {
+      h += `<div class="muted">Titulares</div><div style="margin-bottom:8px">${lu.titulares.map(id=>esc(nombreDe[id]||'—')).join(', ')}</div>`;
+      h += `<div class="muted">Suplentes</div><div>${lu.suplentes.map(id=>esc(nombreDe[id]||'—')).join(', ')||'—'}</div>`;
+    }
+    if (cambios.length) {
+      h += '<div style="margin-top:10px;border-top:1px solid #eef1ee;padding-top:8px"><div class="muted">Cambios</div>';
+      cambios.sort((a,b)=>a.minuto-b.minuto).forEach(c => {
+        h += `<div style="font-size:13px">${c.minuto}' — sale ${esc(nombreDe[c.saleId]||'—')}, entra ${esc(nombreDe[c.entraId]||'—')}</div>`;
+      });
+      h += '</div>';
+    }
+    h += '</div>';
+    return h;
+  };
+  content.innerHTML = `<button class="btn-ghost" onclick="renderDelegate()">← Volver a partidos</button>
+    <h2 class="bebas" style="margin-top:12px">${esc(m.nombre)}</h2><p class="sub">${esc(m.fecha||'')}</p>` +
+    resultadoHtml + (await blockHtml(teamA)) + (await blockHtml(teamB));
 }
 
 async function planillaHtml() {
