@@ -79,6 +79,7 @@ function gsCall(fn, ...args) {
 
 const POSITIONS = ['Portero','Defensa','Volante','Delantero'];
 const RH_TYPES = ['O+','O-','A+','A-','B+','B-','AB+','AB-'];
+const CANCHAS = ['Cancha la Agrícola', 'Cancha la Floresta', 'Cancha Unidad Deportiva'];
 const STATUS = {
   habilitado: {label:'Habilitado', color:'#2E7D46', bg:'#E7F3EA'},
   suspendido: {label:'Suspendido', color:'#B3261E', bg:'#FBEAE9'},
@@ -448,12 +449,15 @@ async function orgPartidosHtml() {
   for (const m of matches) {
     html += `<div class="card" onclick="verPartido('${m.id}')" style="cursor:pointer">
       <div style="font-weight:600">${esc(m.nombre)}</div>
-      <div class="muted">${esc(nombreDe[m.equipoA])} vs ${esc(nombreDe[m.equipoB])}${m.fecha?' · '+esc(m.fecha):''}</div>
+      <div class="muted">${esc(nombreDe[m.equipoA])} vs ${esc(nombreDe[m.equipoB])}${m.fecha?' · '+esc(m.fecha):''}${m.hora?' · '+esc(m.hora):''}</div>
+      ${m.cancha?`<div class="muted">📍 ${esc(m.cancha)}</div>`:''}
     </div>`;
   }
   html += `<div class="card" id="matchForm" style="display:none">
     <input id="m_jornada" type="number" min="1" placeholder="Número de jornada (1, 2, 3...)">
+    <select id="m_cancha"><option value="">Elige la cancha…</option>${CANCHAS.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('')}</select>
     <input id="m_fecha" type="date">
+    <input id="m_hora" type="time">
     <select id="m_a"><option value="">Equipo local…</option>${teams.map(t=>`<option value="${t.id}">${esc(t.nombre)}</option>`).join('')}</select>
     <select id="m_b"><option value="">Equipo visitante…</option>${teams.map(t=>`<option value="${t.id}">${esc(t.nombre)}</option>`).join('')}</select>
     <button class="btn-primary" onclick="submitMatch()">Programar partido</button>
@@ -467,7 +471,10 @@ async function submitMatch() {
   const jornada = document.getElementById('m_jornada').value;
   const a = document.getElementById('m_a').value, b = document.getElementById('m_b').value;
   if (!jornada || !a || !b || a===b) return;
-  await gsCall('addPartido', Number(jornada), document.getElementById('m_fecha').value, a, b);
+  const fecha = document.getElementById('m_fecha').value;
+  const hora = document.getElementById('m_hora').value;
+  const cancha = document.getElementById('m_cancha').value;
+  await gsCall('addPartido', Number(jornada), fecha, a, b, hora, cancha);
   renderOrg();
 }
 
@@ -520,7 +527,7 @@ async function verPartido(matchId) {
     return h;
   };
   content.innerHTML = `<button class="btn-ghost" onclick="renderOrg()">← Volver a partidos</button>
-    <h2 class="bebas" style="margin-top:12px">${esc(m.nombre)}</h2><p class="sub">${esc(m.fecha||'')}</p>` +
+    <h2 class="bebas" style="margin-top:12px">${esc(m.nombre)}</h2><p class="sub">${esc(m.fecha||'')}${m.hora?' · '+esc(m.hora):''}${m.cancha?' · 📍 '+esc(m.cancha):''}</p>` +
     resultadoHtml + (await blockHtml(teamA)) + (await blockHtml(teamB));
 }
 
@@ -635,7 +642,8 @@ async function delegatePartidosHtml() {
     html += `<div class="card row" style="cursor:pointer;align-items:center" onclick="verPartidoDelegado('${m.id}')">
       <div style="flex:1">
         <div style="font-weight:600">${esc(m.nombre)}</div>
-        <div class="muted">vs ${esc(rival||'—')}${m.fecha?' · '+esc(m.fecha):''}</div>
+        <div class="muted">vs ${esc(rival||'—')}${m.fecha?' · '+esc(m.fecha):''}${m.hora?' · '+esc(m.hora):''}</div>
+        ${m.cancha?`<div class="muted">📍 ${esc(m.cancha)}</div>`:''}
       </div>
       ${tieneResultado ? `<div class="bebas" style="font-size:20px;color:#123626">${marcador}</div>` : '<span class="badge" style="color:#8a978d;background:#eef1ee">Sin jugar</span>'}
     </div>`;
@@ -692,7 +700,7 @@ async function verPartidoDelegado(matchId) {
     return h;
   };
   content.innerHTML = `<button class="btn-ghost" onclick="renderDelegate()">← Volver a partidos</button>
-    <h2 class="bebas" style="margin-top:12px">${esc(m.nombre)}</h2><p class="sub">${esc(m.fecha||'')}</p>` +
+    <h2 class="bebas" style="margin-top:12px">${esc(m.nombre)}</h2><p class="sub">${esc(m.fecha||'')}${m.hora?' · '+esc(m.hora):''}${m.cancha?' · 📍 '+esc(m.cancha):''}</p>` +
     resultadoHtml + (await blockHtml(teamA)) + (await blockHtml(teamB));
 }
 
@@ -805,7 +813,7 @@ async function alineacionRender(content) {
   const matches = (await gsCall('getPartidos')).filter(m => m.equipoA === STATE.team.id || m.equipoB === STATE.team.id);
   const players = await gsCall('getJugadores', STATE.team.id);
   content.innerHTML = `<h2 class="bebas">Alineación — ${esc(STATE.team.nombre)}</h2><p class="sub">Elige titulares y suplentes de tu plantilla</p>
-    <select id="al_match" onchange="alineacionCargar()"><option value="">Elige un partido…</option>${matches.map(m=>`<option value="${m.id}">${esc(m.nombre)}${m.fecha?' · '+esc(m.fecha):''}</option>`).join('')}</select>
+    <select id="al_match" onchange="alineacionCargar()"><option value="">Elige un partido…</option>${matches.map(m=>`<option value="${m.id}">${esc(m.nombre)}${m.fecha?' · '+esc(m.fecha):''}${m.hora?' '+esc(m.hora):''}</option>`).join('')}</select>
     <div id="al_body"></div>`;
   window.__alPlayers = players;
   window.__alMatches = matches;
@@ -892,7 +900,7 @@ async function alConfirmar(matchId) {
 async function enVivoRender(content) {
   const matches = (await gsCall('getPartidos')).filter(m => m.equipoA === STATE.team.id || m.equipoB === STATE.team.id);
   content.innerHTML = `<h2 class="bebas">Partido en vivo — ${esc(STATE.team.nombre)}</h2><p class="sub">Registra los cambios a medida que ocurren</p>
-    <select id="ev_match" onchange="enVivoCargar()"><option value="">Elige un partido…</option>${matches.map(m=>`<option value="${m.id}">${esc(m.nombre)}${m.fecha?' · '+esc(m.fecha):''}</option>`).join('')}</select>
+    <select id="ev_match" onchange="enVivoCargar()"><option value="">Elige un partido…</option>${matches.map(m=>`<option value="${m.id}">${esc(m.nombre)}${m.fecha?' · '+esc(m.fecha):''}${m.hora?' '+esc(m.hora):''}</option>`).join('')}</select>
     <div id="ev_body"></div>`;
 }
 async function enVivoCargar() {
@@ -959,7 +967,7 @@ async function renderArbitro() {
 async function arbitroHtml() {
   const matches = await gsCall('getPartidos');
   let html = `<h2 class="bebas">Panel del árbitro</h2><p class="sub">Elige el partido para registrar el resultado, los goles y las tarjetas.</p>
-    <select id="ar_match" onchange="arbitroCargarPartido()"><option value="">Elige un partido…</option>${matches.map(m=>`<option value="${m.id}">${esc(m.nombre)}${m.fecha?' · '+esc(m.fecha):''}</option>`).join('')}</select>
+    <select id="ar_match" onchange="arbitroCargarPartido()"><option value="">Elige un partido…</option>${matches.map(m=>`<option value="${m.id}">${esc(m.nombre)}${m.fecha?' · '+esc(m.fecha):''}${m.hora?' '+esc(m.hora):''}</option>`).join('')}</select>
     <div id="ar_body"></div>`;
   return html;
 }
