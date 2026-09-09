@@ -444,37 +444,92 @@ async function orgRevocarAutorizacion(id) {
 async function orgPartidosHtml() {
   const [matches, teams] = [await gsCall('getPartidos'), await gsCall('getEquipos')];
   const nombreDe = {}; teams.forEach(t => nombreDe[t.id] = t.nombre);
+  window.__matchesData = {};
+  matches.forEach(m => { window.__matchesData[m.id] = m; });
   let html = `<h2 class="bebas">Partidos</h2><p class="sub">Programa partidos y revisa alineaciones y cambios.</p>`;
   if (matches.length === 0) html += '<p class="muted">Aún no hay partidos programados.</p>';
   for (const m of matches) {
-    html += `<div class="card" onclick="verPartido('${m.id}')" style="cursor:pointer">
-      <div style="font-weight:600">${esc(m.nombre)}</div>
-      <div class="muted">${esc(nombreDe[m.equipoA])} vs ${esc(nombreDe[m.equipoB])}${m.fecha?' · '+esc(m.fecha):''}${m.hora?' · '+esc(m.hora):''}</div>
-      ${m.cancha?`<div class="muted">📍 ${esc(m.cancha)}</div>`:''}
+    html += `<div class="card">
+      <div onclick="verPartido('${m.id}')" style="cursor:pointer">
+        <div style="font-weight:600">${esc(m.nombre)}</div>
+        <div class="muted">${esc(nombreDe[m.equipoA])} vs ${esc(nombreDe[m.equipoB])}${m.fecha?' · '+esc(m.fecha):''}${m.hora?' · '+esc(m.hora):''}</div>
+        ${m.cancha?`<div class="muted">📍 ${esc(m.cancha)}</div>`:''}
+        ${m.observaciones?`<div class="muted" style="color:#B8860B;margin-top:4px">⚠ ${esc(m.observaciones)}</div>`:''}
+      </div>
+      <button class="btn-ghost" style="margin-top:8px" onclick="event.stopPropagation(); editarPartidoForm('${m.id}')">Editar día / hora / cancha</button>
     </div>`;
   }
   html += `<div class="card" id="matchForm" style="display:none">
-    <input id="m_jornada" type="number" min="1" placeholder="Número de jornada (1, 2, 3...)">
+    <div class="muted" id="matchFormTitle" style="margin-bottom:6px">Nuevo partido</div>
+    <input type="hidden" id="m_id" value="">
+    <input id="m_jornada" type="number" min="1" placeholder="Número de fecha (1, 2, 3...)">
+    <select id="m_a"><option value="">Equipo local…</option>${teams.map(t=>`<option value="${t.id}">${esc(t.nombre)}</option>`).join('')}</select>
+    <select id="m_b"><option value="">Equipo visitante…</option>${teams.map(t=>`<option value="${t.id}">${esc(t.nombre)}</option>`).join('')}</select>
     <select id="m_cancha"><option value="">Elige la cancha…</option>${CANCHAS.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('')}</select>
     <input id="m_fecha" type="date">
     <input id="m_hora" type="time">
-    <select id="m_a"><option value="">Equipo local…</option>${teams.map(t=>`<option value="${t.id}">${esc(t.nombre)}</option>`).join('')}</select>
-    <select id="m_b"><option value="">Equipo visitante…</option>${teams.map(t=>`<option value="${t.id}">${esc(t.nombre)}</option>`).join('')}</select>
+    <div id="m_obs_wrap" style="display:none">
+      <textarea id="m_obs" rows="3" placeholder="Observación (motivo del cambio, ej: se aplazó por lluvia)" style="width:100%;padding:12px;border-radius:8px;border:1px solid #d8ded8;font-family:inherit;font-size:16px;margin-bottom:8px"></textarea>
+    </div>
     <button class="btn-primary" onclick="submitMatch()">Programar partido</button>
-    <button class="btn-ghost" onclick="document.getElementById('matchForm').style.display='none'; document.getElementById('addMatchBtn').style.display='block';">Cancelar</button>
+    <button class="btn-ghost" onclick="cerrarMatchForm()">Cancelar</button>
   </div>
-  <button class="btn-add" id="addMatchBtn" onclick="document.getElementById('matchForm').style.display='block'; this.style.display='none';">+ Programar partido</button>`;
+  <button class="btn-add" id="addMatchBtn" onclick="abrirMatchForm()">+ Programar partido</button>`;
   return html;
 }
 
+function abrirMatchForm() {
+  document.getElementById('matchFormTitle').textContent = 'Nuevo partido';
+  document.getElementById('m_id').value = '';
+  document.getElementById('m_jornada').value = ''; document.getElementById('m_jornada').disabled = false;
+  document.getElementById('m_a').selectedIndex = 0; document.getElementById('m_a').disabled = false;
+  document.getElementById('m_b').selectedIndex = 0; document.getElementById('m_b').disabled = false;
+  document.getElementById('m_cancha').selectedIndex = 0;
+  document.getElementById('m_fecha').value = '';
+  document.getElementById('m_hora').value = '';
+  document.getElementById('m_obs').value = '';
+  document.getElementById('m_obs_wrap').style.display = 'none';
+  document.getElementById('matchForm').style.display = 'block';
+  document.getElementById('addMatchBtn').style.display = 'none';
+}
+
+function cerrarMatchForm() {
+  document.getElementById('matchForm').style.display = 'none';
+  document.getElementById('addMatchBtn').style.display = 'block';
+}
+
+function editarPartidoForm(matchId) {
+  const m = window.__matchesData[matchId];
+  if (!m) return;
+  document.getElementById('matchFormTitle').textContent = 'Editar partido (el número de fecha y los equipos no cambian)';
+  document.getElementById('m_id').value = m.id;
+  document.getElementById('m_jornada').value = m.jornada; document.getElementById('m_jornada').disabled = true;
+  document.getElementById('m_a').value = m.equipoA; document.getElementById('m_a').disabled = true;
+  document.getElementById('m_b').value = m.equipoB; document.getElementById('m_b').disabled = true;
+  document.getElementById('m_cancha').value = m.cancha || '';
+  document.getElementById('m_fecha').value = m.fecha || '';
+  document.getElementById('m_hora').value = m.hora || '';
+  document.getElementById('m_obs').value = '';
+  document.getElementById('m_obs_wrap').style.display = 'block';
+  document.getElementById('matchForm').style.display = 'block';
+  document.getElementById('addMatchBtn').style.display = 'none';
+  document.getElementById('matchForm').scrollIntoView({ behavior: 'smooth' });
+}
+
 async function submitMatch() {
-  const jornada = document.getElementById('m_jornada').value;
-  const a = document.getElementById('m_a').value, b = document.getElementById('m_b').value;
-  if (!jornada || !a || !b || a===b) return;
+  const id = document.getElementById('m_id').value;
   const fecha = document.getElementById('m_fecha').value;
   const hora = document.getElementById('m_hora').value;
   const cancha = document.getElementById('m_cancha').value;
-  await gsCall('addPartido', Number(jornada), fecha, a, b, hora, cancha);
+  if (id) {
+    const obs = document.getElementById('m_obs').value.trim();
+    await gsCall('editarPartido', id, fecha, hora, cancha, obs);
+  } else {
+    const jornada = document.getElementById('m_jornada').value;
+    const a = document.getElementById('m_a').value, b = document.getElementById('m_b').value;
+    if (!jornada || !a || !b || a===b) return;
+    await gsCall('addPartido', Number(jornada), fecha, a, b, hora, cancha);
+  }
   renderOrg();
 }
 
@@ -527,7 +582,8 @@ async function verPartido(matchId) {
     return h;
   };
   content.innerHTML = `<button class="btn-ghost" onclick="renderOrg()">← Volver a partidos</button>
-    <h2 class="bebas" style="margin-top:12px">${esc(m.nombre)}</h2><p class="sub">${esc(m.fecha||'')}${m.hora?' · '+esc(m.hora):''}${m.cancha?' · 📍 '+esc(m.cancha):''}</p>` +
+    <h2 class="bebas" style="margin-top:12px">${esc(m.nombre)}</h2><p class="sub">${esc(m.fecha||'')}${m.hora?' · '+esc(m.hora):''}${m.cancha?' · 📍 '+esc(m.cancha):''}</p>
+    ${m.observaciones?`<p class="muted" style="color:#B8860B">⚠ ${esc(m.observaciones)}</p>`:''}` +
     resultadoHtml + (await blockHtml(teamA)) + (await blockHtml(teamB));
 }
 
@@ -551,7 +607,7 @@ async function orgTarjetasHtml() {
         </div>
       </div>
       ${t.observaciones ? `<div style="margin-top:6px;font-size:14px">${esc(t.observaciones)}</div>` : ''}
-      ${t.tipo === 'roja' && t.jornadasSancion ? `<div style="margin-top:6px;font-size:13px;color:#B3261E">Suspensión: ${esc(t.jornadasSancion)} jornada${Number(t.jornadasSancion)===1?'':'s'} desde la jornada ${esc(t.jornada||'—')}</div>` : ''}
+      ${t.tipo === 'roja' && t.jornadasSancion ? `<div style="margin-top:6px;font-size:13px;color:#B3261E">Suspensión: ${esc(t.jornadasSancion)} fecha${Number(t.jornadasSancion)===1?'':'s'} desde la fecha ${esc(t.jornada||'—')}</div>` : ''}
       <div class="row" style="margin-top:10px;align-items:center;gap:8px">
         ${pagada
           ? `<span class="badge" style="color:#2E7D46;background:#E3F3E8">Pagada</span><button class="btn-ghost" onclick="orgEliminarTarjeta('${t.id}')">Eliminar</button>`
@@ -628,7 +684,7 @@ async function delegatePartidosHtml() {
   const misPartidos = matches.filter(m => m.equipoA === STATE.team.id || m.equipoB === STATE.team.id)
     .sort((a, b) => (Number(a.jornada) || 0) - (Number(b.jornada) || 0));
   const nombreEquipoDe = {}; teams.forEach(t => nombreEquipoDe[t.id] = t.nombre);
-  let html = `<h2 class="bebas">Partidos — ${esc(STATE.team.nombre)}</h2><p class="sub">Elige una jornada para ver el resultado y los detalles registrados por el árbitro.</p>`;
+  let html = `<h2 class="bebas">Partidos — ${esc(STATE.team.nombre)}</h2><p class="sub">Elige una fecha para ver el resultado y los detalles registrados por el árbitro.</p>`;
   if (misPartidos.length === 0) html += '<p class="muted">Aún no tienes partidos programados.</p>';
   misPartidos.forEach(m => {
     const rival = m.equipoA === STATE.team.id ? nombreEquipoDe[m.equipoB] : nombreEquipoDe[m.equipoA];
@@ -644,6 +700,7 @@ async function delegatePartidosHtml() {
         <div style="font-weight:600">${esc(m.nombre)}</div>
         <div class="muted">vs ${esc(rival||'—')}${m.fecha?' · '+esc(m.fecha):''}${m.hora?' · '+esc(m.hora):''}</div>
         ${m.cancha?`<div class="muted">📍 ${esc(m.cancha)}</div>`:''}
+        ${m.observaciones?`<div class="muted" style="color:#B8860B">⚠ ${esc(m.observaciones)}</div>`:''}
       </div>
       ${tieneResultado ? `<div class="bebas" style="font-size:20px;color:#123626">${marcador}</div>` : '<span class="badge" style="color:#8a978d;background:#eef1ee">Sin jugar</span>'}
     </div>`;
@@ -700,7 +757,8 @@ async function verPartidoDelegado(matchId) {
     return h;
   };
   content.innerHTML = `<button class="btn-ghost" onclick="renderDelegate()">← Volver a partidos</button>
-    <h2 class="bebas" style="margin-top:12px">${esc(m.nombre)}</h2><p class="sub">${esc(m.fecha||'')}${m.hora?' · '+esc(m.hora):''}${m.cancha?' · 📍 '+esc(m.cancha):''}</p>` +
+    <h2 class="bebas" style="margin-top:12px">${esc(m.nombre)}</h2><p class="sub">${esc(m.fecha||'')}${m.hora?' · '+esc(m.hora):''}${m.cancha?' · 📍 '+esc(m.cancha):''}</p>
+    ${m.observaciones?`<p class="muted" style="color:#B8860B">⚠ ${esc(m.observaciones)}</p>`:''}` +
     resultadoHtml + (await blockHtml(teamA)) + (await blockHtml(teamB));
 }
 
@@ -846,7 +904,7 @@ function estadoTarjetaJugador(jugadorId) {
       const sancion = Number(t.jornadasSancion) || 0;
       const bloqueadoHasta = cardJornada + sancion - 1;
       if (sancion > 0 && jornadaActual > cardJornada && jornadaActual <= bloqueadoHasta) {
-        return { bloqueado: true, motivo: `Suspendido por roja hasta que pase la jornada ${bloqueadoHasta}` };
+        return { bloqueado: true, motivo: `Suspendido por roja hasta que pase la fecha ${bloqueadoHasta}` };
       }
     }
   }
@@ -1036,7 +1094,7 @@ async function arbitroRedibujar() {
       <option value="roja">Tarjeta roja</option>
     </select>
     <div id="ar_sancion_wrap" style="display:none">
-      <input type="number" min="1" id="ar_sancion" placeholder="¿Cuántas jornadas de suspensión?">
+      <input type="number" min="1" id="ar_sancion" placeholder="¿Cuántas fechas de suspensión?">
     </div>
     <textarea id="ar_obs" rows="3" placeholder="Observaciones (motivo, detalle de la sanción, etc.)" style="width:100%;padding:12px;border-radius:8px;border:1px solid #d8ded8;font-family:inherit;font-size:16px;margin-bottom:8px"></textarea>
     <button class="btn-primary" onclick="arbitroRegistrar()">Registrar tarjeta</button>
@@ -1108,7 +1166,7 @@ async function arbitroRegistrar() {
   const obs = document.getElementById('ar_obs').value.trim();
   const sancion = document.getElementById('ar_sancion').value;
   if (!equipoId || !jugadorId) return;
-  if (tipo === 'roja' && !sancion) { alert('Indica cuántas jornadas de suspensión lleva la tarjeta roja.'); return; }
+  if (tipo === 'roja' && !sancion) { alert('Indica cuántas fechas de suspensión lleva la tarjeta roja.'); return; }
   const team = (teams.a.id === equipoId) ? teams.a : teams.b;
   const players = await gsCall('getJugadores', equipoId);
   const jugador = players.find(p => p.id === jugadorId);
@@ -1128,7 +1186,7 @@ function tarjetaCardHtml(t, nombreEquipoDe, nombreJugadorDe) {
       </div>
     </div>
     ${t.observaciones ? `<div style="margin-top:6px;font-size:14px">${esc(t.observaciones)}</div>` : ''}
-    ${t.tipo === 'roja' && t.jornadasSancion ? `<div style="margin-top:6px;font-size:13px;color:#B3261E">Suspensión: ${esc(t.jornadasSancion)} jornada${Number(t.jornadasSancion)===1?'':'s'} desde la jornada ${esc(t.jornada||'—')}</div>` : ''}
+    ${t.tipo === 'roja' && t.jornadasSancion ? `<div style="margin-top:6px;font-size:13px;color:#B3261E">Suspensión: ${esc(t.jornadasSancion)} fecha${Number(t.jornadasSancion)===1?'':'s'} desde la fecha ${esc(t.jornada||'—')}</div>` : ''}
     <div style="margin-top:8px">${pagada
       ? '<span class="badge" style="color:#2E7D46;background:#E3F3E8">Pagada</span>'
       : '<span class="badge" style="color:#8a978d;background:#eef1ee">Pendiente de pago</span>'}</div>
