@@ -28,6 +28,11 @@
   .btn-ghost { background:transparent; color:#123626; border:1px solid #c7d2c9; border-radius:10px; padding:12px 18px; font-size:16px; font-weight:600; cursor:pointer; }
   .btn-add { width:100%; background:#fff; border:1px dashed #9db3a2; border-radius:12px; padding:16px; font-size:16px; font-weight:600; color:#123626; cursor:pointer; }
   .badge { font-size:13px; font-weight:600; padding:4px 10px; border-radius:20px; margin-right:6px; display:inline-block; }
+  table.resumen { width:100%; border-collapse:collapse; font-size:13px; }
+  table.resumen th, table.resumen td { padding:7px 8px; text-align:center; border-bottom:1px solid #eef1ee; white-space:nowrap; }
+  table.resumen th { background:#123626; color:#fff; font-size:11px; text-transform:uppercase; letter-spacing:.03em; }
+  table.resumen td:nth-child(2), table.resumen th:nth-child(2) { text-align:left; white-space:normal; }
+  table.resumen tbody tr:nth-child(odd) { background:#F7FAF7; }
   .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
   .stack { display:flex; flex-direction:column; gap:10px; }
   .photo { width:80px; height:80px; border-radius:10px; background:#dfe7e0; flex-shrink:0; overflow:hidden; display:flex; align-items:center; justify-content:center; }
@@ -54,6 +59,8 @@
 </header>
 <main id="app"></main>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 <script>
 const API_URL = 'https://script.google.com/macros/s/AKfycbwSPtk7m5Ulc2EcSQ486KZFoJiL91dG9sZeKXIFb07oWifRyuQmVobIVlJvFJUawdPK/exec';
 
@@ -132,7 +139,7 @@ async function intentarPin() {
   const res = await gsCall('verificarPin', pin);
   if (!res) { renderPinGate('PIN incorrecto. Intenta de nuevo.'); return; }
   if (res.rol === 'organizador') {
-    STATE.rol = 'organizador'; STATE.tab = 'equipos';
+    STATE.rol = 'organizador'; STATE.tab = 'resumen';
     document.getElementById('whoami').innerHTML = '<button onclick="cerrarSesion()">Organizador · salir</button>';
     renderOrg();
   } else if (res.rol === 'arbitro') {
@@ -150,9 +157,10 @@ function cerrarSesion() { STATE = { tab: null, rol: null, team: null }; renderPi
 
 // ================= ORGANIZADOR =================
 async function renderOrg() {
-  const tabs = [['equipos','Equipos'],['carnets','Carnets'],['partidos','Partidos'],['tarjetas','Amonestaciones'],['actividad','Actividad']];
+  const tabs = [['resumen','Resumen'],['equipos','Equipos'],['carnets','Carnets'],['partidos','Partidos'],['tarjetas','Amonestaciones'],['actividad','Actividad']];
   app.innerHTML = '<div id="content"></div>' + tabBarHtml(tabs, STATE.tab, 'renderOrg');
   const content = document.getElementById('content');
+  if (STATE.tab === 'resumen') content.innerHTML = await orgResumenHtml();
   if (STATE.tab === 'equipos') content.innerHTML = await orgEquiposHtml();
   if (STATE.tab === 'carnets') content.innerHTML = await orgCarnetsHtml();
   if (STATE.tab === 'partidos') content.innerHTML = await orgPartidosHtml();
@@ -164,6 +172,129 @@ function tabBarHtml(tabs, active, renderFn) {
   return '<div class="tabbar">' + tabs.map(([k,l]) =>
     `<button class="${active===k?'active':''}" onclick="STATE.tab='${k}'; ${renderFn}();">${l}</button>`
   ).join('') + '</div>';
+}
+
+function descargarTablaPDF(titulo, headers, rows, filename) {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  doc.setFontSize(14);
+  doc.text(titulo, 14, 15);
+  doc.autoTable({ head: [headers], body: rows, startY: 20, styles: { fontSize: 9 }, headStyles: { fillColor: [18, 54, 38] } });
+  doc.save(filename);
+}
+
+function descargarPosicionesPDF() {
+  const headers = ['#', 'Equipo', 'PJ', 'Pts', 'GF', 'GC', 'DG', 'TA', 'TR'];
+  const rows = window.__resumen.posiciones.map((t, i) => [i + 1, t.nombre, t.pj, t.pts, t.gf, t.gc, (t.dg > 0 ? '+' : '') + t.dg, t.ta, t.tr]);
+  descargarTablaPDF('Tabla de posiciones', headers, rows, 'tabla_posiciones.pdf');
+}
+
+function descargarGoleadoresPDF() {
+  const headers = ['#', 'Jugador', 'Equipo', 'Goles'];
+  const rows = window.__resumen.goleadores.map((g, i) => [i + 1, g.nombre, g.equipoNombre, g.goles]);
+  descargarTablaPDF('Tabla de goleadores', headers, rows, 'tabla_goleadores.pdf');
+}
+
+function descargarVallaPDF() {
+  const headers = ['#', 'Equipo', 'PJ', 'GC'];
+  const rows = window.__resumen.valla.map((t, i) => [i + 1, t.nombre, t.pj, t.gc]);
+  descargarTablaPDF('Valla menos vencida', headers, rows, 'valla_menos_vencida.pdf');
+}
+
+async function orgResumenHtml() {
+  const [teams, matches, tarjetas, golesTodos, players] = [
+    await gsCall('getEquipos'), await gsCall('getPartidos'), await gsCall('getTarjetasTodas'),
+    await gsCall('getGolesTodos'), await gsCall('getJugadoresTodos')
+  ];
+
+  // ---- Tabla de posiciones ----
+  const statsDe = {};
+  teams.forEach(t => { statsDe[t.id] = { id: t.id, nombre: t.nombre, pj: 0, pts: 0, gf: 0, gc: 0, ta: 0, tr: 0 }; });
+  matches.forEach(m => {
+    const tieneResultado = m.golesA !== '' && m.golesA !== undefined && m.golesA !== null;
+    if (!tieneResultado) return;
+    const a = statsDe[m.equipoA], b = statsDe[m.equipoB];
+    if (!a || !b) return;
+    const gA = Number(m.golesA), gB = Number(m.golesB);
+    a.pj++; b.pj++;
+    a.gf += gA; a.gc += gB;
+    b.gf += gB; b.gc += gA;
+    if (gA > gB) a.pts += 3;
+    else if (gA < gB) b.pts += 3;
+    else { a.pts += 1; b.pts += 1; }
+  });
+  tarjetas.forEach(t => {
+    const s = statsDe[t.equipoId];
+    if (!s) return;
+    if (t.tipo === 'amarilla') s.ta++;
+    else if (t.tipo === 'roja') s.tr++;
+  });
+  const posiciones = Object.values(statsDe).map(s => Object.assign({}, s, { dg: s.gf - s.gc }));
+  posiciones.sort((x, y) => (y.pts - x.pts) || (y.dg - x.dg) || ((x.ta + x.tr) - (y.ta + y.tr)));
+
+  // ---- Goleadores ----
+  const nombreEquipoDe = {}; teams.forEach(t => nombreEquipoDe[t.id] = t.nombre);
+  const nombreJugadorDe = {}; players.forEach(p => nombreJugadorDe[p.id] = p.nombre);
+  const golesDe = {};
+  golesTodos.forEach(g => {
+    if (!golesDe[g.jugadorId]) golesDe[g.jugadorId] = { jugadorId: g.jugadorId, equipoId: g.equipoId, goles: 0 };
+    golesDe[g.jugadorId].goles += Number(g.goles) || 0;
+  });
+  const goleadores = Object.values(golesDe)
+    .map(g => Object.assign({}, g, { nombre: nombreJugadorDe[g.jugadorId] || '—', equipoNombre: nombreEquipoDe[g.equipoId] || '—' }))
+    .filter(g => g.goles > 0)
+    .sort((a, b) => b.goles - a.goles);
+
+  // ---- Valla menos vencida ----
+  const valla = posiciones.filter(t => t.pj > 0).slice().sort((a, b) => (a.gc - b.gc) || (a.pj - b.pj));
+
+  window.__resumen = { posiciones, goleadores, valla };
+
+  let html = `<h2 class="bebas">Resumen del torneo</h2><p class="sub">Se actualiza solo, con los resultados, goles y tarjetas que registran los árbitros.</p>`;
+
+  html += `<div class="card">
+    <div class="row" style="align-items:center;margin-bottom:8px">
+      <div style="flex:1;font-weight:600">Tabla de posiciones</div>
+      <button class="btn-ghost" onclick="descargarPosicionesPDF()">Descargar PDF</button>
+    </div>`;
+  if (posiciones.length === 0) html += '<p class="muted">Aún no hay equipos inscritos.</p>';
+  else {
+    html += `<div style="overflow-x:auto"><table class="resumen"><thead><tr>
+      <th>#</th><th>Equipo</th><th>PJ</th><th>Pts</th><th>GF</th><th>GC</th><th>DG</th><th>TA</th><th>TR</th>
+    </tr></thead><tbody>` +
+      posiciones.map((t, i) => `<tr><td>${i + 1}</td><td>${esc(t.nombre)}</td><td>${t.pj}</td><td><strong>${t.pts}</strong></td><td>${t.gf}</td><td>${t.gc}</td><td>${t.dg > 0 ? '+' : ''}${t.dg}</td><td>${t.ta}</td><td>${t.tr}</td></tr>`).join('') +
+      '</tbody></table></div>';
+    html += '<p class="muted" style="margin-top:8px">Desempate en este orden: puntos → diferencia de goles → menos tarjetas (amarillas + rojas).</p>';
+  }
+  html += '</div>';
+
+  html += `<div class="card">
+    <div class="row" style="align-items:center;margin-bottom:8px">
+      <div style="flex:1;font-weight:600">Tabla de goleadores</div>
+      <button class="btn-ghost" onclick="descargarGoleadoresPDF()">Descargar PDF</button>
+    </div>`;
+  if (goleadores.length === 0) html += '<p class="muted">Aún no hay goles registrados.</p>';
+  else {
+    html += `<div style="overflow-x:auto"><table class="resumen"><thead><tr><th>#</th><th>Jugador</th><th>Equipo</th><th>Goles</th></tr></thead><tbody>` +
+      goleadores.map((g, i) => `<tr><td>${i + 1}</td><td>${esc(g.nombre)}</td><td>${esc(g.equipoNombre)}</td><td><strong>${g.goles}</strong></td></tr>`).join('') +
+      '</tbody></table></div>';
+  }
+  html += '</div>';
+
+  html += `<div class="card">
+    <div class="row" style="align-items:center;margin-bottom:8px">
+      <div style="flex:1;font-weight:600">Valla menos vencida</div>
+      <button class="btn-ghost" onclick="descargarVallaPDF()">Descargar PDF</button>
+    </div>`;
+  if (valla.length === 0) html += '<p class="muted">Aún no hay partidos con resultado registrado.</p>';
+  else {
+    html += `<div style="overflow-x:auto"><table class="resumen"><thead><tr><th>#</th><th>Equipo</th><th>PJ</th><th>GC</th></tr></thead><tbody>` +
+      valla.map((t, i) => `<tr><td>${i + 1}</td><td>${esc(t.nombre)}</td><td>${t.pj}</td><td><strong>${t.gc}</strong></td></tr>`).join('') +
+      '</tbody></table></div>';
+  }
+  html += '</div>';
+
+  return html;
 }
 
 async function orgEquiposHtml() {
