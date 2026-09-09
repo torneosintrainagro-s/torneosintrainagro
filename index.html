@@ -321,7 +321,7 @@ async function orgPartidosHtml() {
     </div>`;
   }
   html += `<div class="card" id="matchForm" style="display:none">
-    <input id="m_nombre" placeholder="Nombre del partido (ej. Jornada 3)">
+    <input id="m_jornada" type="number" min="1" placeholder="Número de jornada (1, 2, 3...)">
     <input id="m_fecha" type="date">
     <select id="m_a"><option value="">Equipo local…</option>${teams.map(t=>`<option value="${t.id}">${esc(t.nombre)}</option>`).join('')}</select>
     <select id="m_b"><option value="">Equipo visitante…</option>${teams.map(t=>`<option value="${t.id}">${esc(t.nombre)}</option>`).join('')}</select>
@@ -333,10 +333,10 @@ async function orgPartidosHtml() {
 }
 
 async function submitMatch() {
-  const nombre = document.getElementById('m_nombre').value.trim() || 'Partido';
+  const jornada = document.getElementById('m_jornada').value;
   const a = document.getElementById('m_a').value, b = document.getElementById('m_b').value;
-  if (!a || !b || a===b) return;
-  await gsCall('addPartido', nombre, document.getElementById('m_fecha').value, a, b);
+  if (!jornada || !a || !b || a===b) return;
+  await gsCall('addPartido', Number(jornada), document.getElementById('m_fecha').value, a, b);
   renderOrg();
 }
 
@@ -346,6 +346,27 @@ async function verPartido(matchId) {
   const teamA = teams.find(t => t.id === m.equipoA), teamB = teams.find(t => t.id === m.equipoB);
   const content = document.getElementById('content');
   content.innerHTML = '<p class="muted">Cargando…</p>';
+  const [playersA, playersB, goles] = [await gsCall('getJugadores', teamA.id), await gsCall('getJugadores', teamB.id), await gsCall('getGoles', matchId)];
+  const nombreJugadorDe = {}; [...playersA, ...playersB].forEach(p => nombreJugadorDe[p.id] = p.nombre);
+  const tieneResultado = m.golesA !== '' && m.golesA !== undefined && m.golesA !== null;
+  let resultadoHtml = `<div class="card" style="text-align:center">`;
+  if (tieneResultado) {
+    resultadoHtml += `<div class="row" style="justify-content:center;align-items:center;gap:16px">
+      <div style="flex:1;text-align:right;font-weight:600">${esc(teamA.nombre)}</div>
+      <div class="bebas" style="font-size:32px;color:#123626">${esc(m.golesA)} - ${esc(m.golesB)}</div>
+      <div style="flex:1;text-align:left;font-weight:600">${esc(teamB.nombre)}</div>
+    </div>`;
+  } else {
+    resultadoHtml += '<p class="muted">El árbitro aún no registra el resultado.</p>';
+  }
+  const golesTeam = (equipoId) => goles.filter(g => g.equipoId === equipoId).map(g => `${esc(nombreJugadorDe[g.jugadorId]||'—')} (${esc(g.goles)})`).join(', ');
+  if (goles.length) {
+    resultadoHtml += `<div style="margin-top:10px;text-align:left;border-top:1px solid #eef1ee;padding-top:8px">
+      <div class="muted">Goles ${esc(teamA.nombre)}</div><div style="margin-bottom:6px">${golesTeam(teamA.id)||'—'}</div>
+      <div class="muted">Goles ${esc(teamB.nombre)}</div><div>${golesTeam(teamB.id)||'—'}</div>
+    </div>`;
+  }
+  resultadoHtml += '</div>';
   const blockHtml = async (team) => {
     const players = await gsCall('getJugadores', team.id);
     const nombreDe = {}; players.forEach(p => nombreDe[p.id] = p.nombre);
@@ -369,7 +390,7 @@ async function verPartido(matchId) {
   };
   content.innerHTML = `<button class="btn-ghost" onclick="renderOrg()">← Volver a partidos</button>
     <h2 class="bebas" style="margin-top:12px">${esc(m.nombre)}</h2><p class="sub">${esc(m.fecha||'')}</p>` +
-    (await blockHtml(teamA)) + (await blockHtml(teamB));
+    resultadoHtml + (await blockHtml(teamA)) + (await blockHtml(teamB));
 }
 
 async function orgTarjetasHtml() {
@@ -392,6 +413,7 @@ async function orgTarjetasHtml() {
         </div>
       </div>
       ${t.observaciones ? `<div style="margin-top:6px;font-size:14px">${esc(t.observaciones)}</div>` : ''}
+      ${t.tipo === 'roja' && t.jornadasSancion ? `<div style="margin-top:6px;font-size:13px;color:#B3261E">Suspensión: ${esc(t.jornadasSancion)} jornada${Number(t.jornadasSancion)===1?'':'s'} desde la jornada ${esc(t.jornada||'—')}</div>` : ''}
       <div class="row" style="margin-top:10px;align-items:center;gap:8px">
         ${pagada
           ? `<span class="badge" style="color:#2E7D46;background:#E3F3E8">Pagada</span><button class="btn-ghost" onclick="orgEliminarTarjeta('${t.id}')">Eliminar</button>`
@@ -574,6 +596,7 @@ async function alineacionRender(content) {
     <select id="al_match" onchange="alineacionCargar()"><option value="">Elige un partido…</option>${matches.map(m=>`<option value="${m.id}">${esc(m.nombre)}${m.fecha?' · '+esc(m.fecha):''}</option>`).join('')}</select>
     <div id="al_body"></div>`;
   window.__alPlayers = players;
+  window.__alMatches = matches;
 }
 let alTitulares = [], alSuplentes = [];
 async function alineacionCargar() {
@@ -583,20 +606,52 @@ async function alineacionCargar() {
   const lu = await gsCall('getAlineacion', matchId, STATE.team.id);
   alTitulares = lu ? lu.titulares : [];
   alSuplentes = lu ? lu.suplentes : [];
+  window.__alTarjetas = await gsCall('getTarjetasTodas');
+  const match = (window.__alMatches || []).find(m => m.id === matchId);
+  window.__alJornadaActual = (match && match.jornada !== '' && match.jornada != null) ? Number(match.jornada) : null;
   alineacionRedibujar(matchId, !!lu);
 }
+
+// Revisa si un jugador puede alinearse: sin tarjetas pendientes de pago, y sin suspensión activa por roja
+function estadoTarjetaJugador(jugadorId) {
+  const jornadaActual = window.__alJornadaActual;
+  const tarjetas = (window.__alTarjetas || []).filter(t => t.jugadorId === jugadorId);
+  for (const t of tarjetas) {
+    const pagada = t.pagada === true || String(t.pagada).toUpperCase() === 'TRUE';
+    if (!pagada) {
+      return { bloqueado: true, motivo: `Tarjeta ${t.tipo} pendiente de pago` };
+    }
+    if (t.tipo === 'roja' && jornadaActual != null && t.jornada !== '' && t.jornada != null) {
+      const cardJornada = Number(t.jornada);
+      const sancion = Number(t.jornadasSancion) || 0;
+      const bloqueadoHasta = cardJornada + sancion - 1;
+      if (sancion > 0 && jornadaActual > cardJornada && jornadaActual <= bloqueadoHasta) {
+        return { bloqueado: true, motivo: `Suspendido por roja hasta que pase la jornada ${bloqueadoHasta}` };
+      }
+    }
+  }
+  return { bloqueado: false, motivo: '' };
+}
+
 function alineacionRedibujar(matchId, confirmed) {
   const body = document.getElementById('al_body');
   const players = window.__alPlayers;
+  window.__alHabilitados = {};
   let html = `<div class="muted" style="margin:10px 0">Titulares: ${alTitulares.length}/11 · Suplentes: ${alSuplentes.length}</div>`;
   if (players.length === 0) html += '<p class="muted">Agrega jugadores en Planilla primero.</p>';
   players.forEach(p => {
     const isT = alTitulares.includes(p.id), isS = alSuplentes.includes(p.id);
     const autorizado = p.autorizado === true || String(p.autorizado).toUpperCase() === 'TRUE';
+    const est = estadoTarjetaJugador(p.id);
+    const habilitado = autorizado && !est.bloqueado;
+    window.__alHabilitados[p.id] = habilitado;
+    let motivo = '';
+    if (!autorizado) motivo = 'Pendiente de autorización del organizador';
+    else if (est.bloqueado) motivo = est.motivo;
     html += `<div class="card row" style="padding:10px">
-      <div style="flex:1;font-size:14px">#${esc(p.numero)} ${esc(p.nombre)} <span class="muted">· ${esc(p.posicion)}</span>${!autorizado?'<div class="muted" style="color:#B8860B">Pendiente de autorización del organizador</div>':''}</div>
-      <button class="toggle ${isT?'on-t':''}" ${autorizado?'':'disabled'} onclick="alToggle('t','${p.id}','${matchId}',${confirmed})">Titular</button>
-      <button class="toggle ${isS?'on-s':''}" ${autorizado?'':'disabled'} onclick="alToggle('s','${p.id}','${matchId}',${confirmed})">Suplente</button>
+      <div style="flex:1;font-size:14px">#${esc(p.numero)} ${esc(p.nombre)} <span class="muted">· ${esc(p.posicion)}</span>${motivo?`<div class="muted" style="color:#B8860B">${esc(motivo)}</div>`:''}</div>
+      <button class="toggle ${isT?'on-t':''}" ${habilitado?'':'disabled'} onclick="alToggle('t','${p.id}','${matchId}',${confirmed})">Titular</button>
+      <button class="toggle ${isS?'on-s':''}" ${habilitado?'':'disabled'} onclick="alToggle('s','${p.id}','${matchId}',${confirmed})">Suplente</button>
     </div>`;
   });
   html += `<button class="btn-primary" style="margin-top:8px" onclick="alConfirmar('${matchId}')">${confirmed?'Actualizar alineación confirmada':'Confirmar alineación'}</button>`;
@@ -604,9 +659,8 @@ function alineacionRedibujar(matchId, confirmed) {
   body.innerHTML = html;
 }
 function alToggle(kind, id, matchId, confirmed) {
-  const jp = (window.__alPlayers || []).find(x => x.id === id);
-  const autorizado = jp && (jp.autorizado === true || String(jp.autorizado).toUpperCase() === 'TRUE');
-  if (!autorizado) return;
+  const habilitado = (window.__alHabilitados || {})[id];
+  if (!habilitado) return;
   if (kind === 't') {
     if (alTitulares.includes(id)) alTitulares = alTitulares.filter(x=>x!==id);
     else if (!alSuplentes.includes(id) && alTitulares.length < 11) alTitulares.push(id);
@@ -692,7 +746,7 @@ async function renderArbitro() {
 
 async function arbitroHtml() {
   const matches = await gsCall('getPartidos');
-  let html = `<h2 class="bebas">Amonestaciones</h2><p class="sub">Elige el partido para registrar tarjetas y sanciones.</p>
+  let html = `<h2 class="bebas">Panel del árbitro</h2><p class="sub">Elige el partido para registrar el resultado, los goles y las tarjetas.</p>
     <select id="ar_match" onchange="arbitroCargarPartido()"><option value="">Elige un partido…</option>${matches.map(m=>`<option value="${m.id}">${esc(m.nombre)}${m.fecha?' · '+esc(m.fecha):''}</option>`).join('')}</select>
     <div id="ar_body"></div>`;
   return html;
@@ -713,11 +767,41 @@ async function arbitroCargarPartido() {
 async function arbitroRedibujar() {
   const m = window.__arMatch, teamA = window.__arTeams.a, teamB = window.__arTeams.b;
   const body = document.getElementById('ar_body');
-  const [tarjetas, playersA, playersB] = [await gsCall('getTarjetas', m.id), await gsCall('getJugadores', teamA.id), await gsCall('getJugadores', teamB.id)];
+  const [tarjetas, playersA, playersB, goles] = [await gsCall('getTarjetas', m.id), await gsCall('getJugadores', teamA.id), await gsCall('getJugadores', teamB.id), await gsCall('getGoles', m.id)];
   const nombreEquipoDe = {}; [teamA, teamB].forEach(t => nombreEquipoDe[t.id] = t.nombre);
   const nombreJugadorDe = {}; [...playersA, ...playersB].forEach(p => nombreJugadorDe[p.id] = '#' + esc(p.numero) + ' ' + esc(p.nombre));
+  const golDe = {}; goles.forEach(g => golDe[g.jugadorId] = g.goles);
+  const tieneResultado = m.golesA !== '' && m.golesA !== undefined && m.golesA !== null;
 
-  let html = `<div class="card">
+  let html = `<p class="muted" style="margin-top:-4px">${esc(m.nombre)}${m.fecha?' · '+esc(m.fecha):''}</p>
+  <div class="card">
+    <div class="muted" style="margin-bottom:8px">Resultado del partido</div>
+    <div class="row" style="align-items:center;gap:10px">
+      <div style="flex:1;font-size:13px;font-weight:600">${esc(teamA.nombre)}</div>
+      <input type="number" min="0" id="ar_golesA" value="${tieneResultado?esc(m.golesA):''}" style="width:70px;text-align:center;margin:0">
+      <div class="bebas" style="font-size:20px">-</div>
+      <input type="number" min="0" id="ar_golesB" value="${tieneResultado?esc(m.golesB):''}" style="width:70px;text-align:center;margin:0">
+      <div style="flex:1;font-size:13px;font-weight:600;text-align:right">${esc(teamB.nombre)}</div>
+    </div>
+    <button class="btn-primary" style="margin-top:10px;width:100%" onclick="arbitroGuardarResultado()">Guardar resultado</button>
+  </div>
+
+  <div class="card">
+    <div class="muted" style="margin-bottom:8px">Goles por jugador</div>
+    <div style="font-weight:600;font-size:13px;margin-bottom:4px">${esc(teamA.nombre)}</div>
+    ${playersA.map(p => `<div class="row" style="align-items:center;margin-bottom:6px">
+      <div style="flex:1;font-size:14px">#${esc(p.numero)} ${esc(p.nombre)}</div>
+      <input type="number" min="0" id="gol_${p.id}" value="${golDe[p.id]||''}" placeholder="0" style="width:60px;text-align:center;margin:0">
+    </div>`).join('')}
+    <div style="font-weight:600;font-size:13px;margin:10px 0 4px">${esc(teamB.nombre)}</div>
+    ${playersB.map(p => `<div class="row" style="align-items:center;margin-bottom:6px">
+      <div style="flex:1;font-size:14px">#${esc(p.numero)} ${esc(p.nombre)}</div>
+      <input type="number" min="0" id="gol_${p.id}" value="${golDe[p.id]||''}" placeholder="0" style="width:60px;text-align:center;margin:0">
+    </div>`).join('')}
+    <button class="btn-primary" style="margin-top:6px;width:100%" onclick="arbitroGuardarGoles()">Guardar goles</button>
+  </div>
+
+  <div class="card">
     <div class="muted" style="margin-bottom:8px">Registrar amonestación</div>
     <select id="ar_equipo" onchange="arbitroCargarJugadores()">
       <option value="">Elige el equipo…</option>
@@ -727,17 +811,49 @@ async function arbitroRedibujar() {
     <div class="muted" style="margin:4px 0 6px">Jugador</div>
     <input type="hidden" id="ar_jugador" value="">
     <div id="ar_jugador_lista" class="muted" style="margin-bottom:10px">Elige primero el equipo…</div>
-    <select id="ar_tipo">
+    <select id="ar_tipo" onchange="arbitroToggleSancion()">
       <option value="amarilla">Tarjeta amarilla</option>
       <option value="roja">Tarjeta roja</option>
     </select>
-    <textarea id="ar_obs" rows="3" placeholder="Observaciones (motivo, sanción, suspensión, etc.)" style="width:100%;padding:12px;border-radius:8px;border:1px solid #d8ded8;font-family:inherit;font-size:16px;margin-bottom:8px"></textarea>
+    <div id="ar_sancion_wrap" style="display:none">
+      <input type="number" min="1" id="ar_sancion" placeholder="¿Cuántas jornadas de suspensión?">
+    </div>
+    <textarea id="ar_obs" rows="3" placeholder="Observaciones (motivo, detalle de la sanción, etc.)" style="width:100%;padding:12px;border-radius:8px;border:1px solid #d8ded8;font-family:inherit;font-size:16px;margin-bottom:8px"></textarea>
     <button class="btn-primary" onclick="arbitroRegistrar()">Registrar tarjeta</button>
   </div>
   <div class="muted" style="margin:14px 0 6px">Tarjetas de este partido</div>`;
   if (tarjetas.length === 0) html += '<p class="muted">Aún no hay tarjetas registradas en este partido.</p>';
   tarjetas.slice().reverse().forEach(t => { html += tarjetaCardHtml(t, nombreEquipoDe, nombreJugadorDe); });
   body.innerHTML = html;
+}
+
+function arbitroToggleSancion() {
+  const tipo = document.getElementById('ar_tipo').value;
+  document.getElementById('ar_sancion_wrap').style.display = tipo === 'roja' ? 'block' : 'none';
+}
+
+async function arbitroGuardarResultado() {
+  const m = window.__arMatch;
+  const golesA = document.getElementById('ar_golesA').value;
+  const golesB = document.getElementById('ar_golesB').value;
+  if (golesA === '' || golesB === '') { alert('Completa el marcador de ambos equipos.'); return; }
+  await gsCall('guardarResultado', m.id, Number(golesA), Number(golesB));
+  alert('Resultado guardado.');
+}
+
+async function arbitroGuardarGoles() {
+  const teamA = window.__arTeams.a, teamB = window.__arTeams.b, m = window.__arMatch;
+  const [playersA, playersB] = [await gsCall('getJugadores', teamA.id), await gsCall('getJugadores', teamB.id)];
+  for (const p of playersA) {
+    const v = document.getElementById('gol_' + p.id).value;
+    await gsCall('guardarGolJugador', m.id, p.id, teamA.id, Number(v) || 0);
+  }
+  for (const p of playersB) {
+    const v = document.getElementById('gol_' + p.id).value;
+    await gsCall('guardarGolJugador', m.id, p.id, teamB.id, Number(v) || 0);
+  }
+  alert('Goles guardados.');
+  await arbitroRedibujar();
 }
 
 async function arbitroCargarJugadores() {
@@ -770,11 +886,13 @@ async function arbitroRegistrar() {
   const jugadorId = document.getElementById('ar_jugador').value;
   const tipo = document.getElementById('ar_tipo').value;
   const obs = document.getElementById('ar_obs').value.trim();
+  const sancion = document.getElementById('ar_sancion').value;
   if (!equipoId || !jugadorId) return;
+  if (tipo === 'roja' && !sancion) { alert('Indica cuántas jornadas de suspensión lleva la tarjeta roja.'); return; }
   const team = (teams.a.id === equipoId) ? teams.a : teams.b;
   const players = await gsCall('getJugadores', equipoId);
   const jugador = players.find(p => p.id === jugadorId);
-  await gsCall('addTarjeta', m.id, equipoId, jugadorId, tipo, obs, team.nombre, jugador ? jugador.nombre : '', m.nombre);
+  await gsCall('addTarjeta', m.id, equipoId, jugadorId, tipo, obs, team.nombre, jugador ? jugador.nombre : '', m.nombre, m.jornada, sancion ? Number(sancion) : 0);
   await arbitroRedibujar();
 }
 
@@ -790,6 +908,7 @@ function tarjetaCardHtml(t, nombreEquipoDe, nombreJugadorDe) {
       </div>
     </div>
     ${t.observaciones ? `<div style="margin-top:6px;font-size:14px">${esc(t.observaciones)}</div>` : ''}
+    ${t.tipo === 'roja' && t.jornadasSancion ? `<div style="margin-top:6px;font-size:13px;color:#B3261E">Suspensión: ${esc(t.jornadasSancion)} jornada${Number(t.jornadasSancion)===1?'':'s'} desde la jornada ${esc(t.jornada||'—')}</div>` : ''}
     <div style="margin-top:8px">${pagada
       ? '<span class="badge" style="color:#2E7D46;background:#E3F3E8">Pagada</span>'
       : '<span class="badge" style="color:#8a978d;background:#eef1ee">Pendiente de pago</span>'}</div>
