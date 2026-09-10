@@ -202,6 +202,16 @@ function descargarVallaPDF() {
   descargarTablaPDF('Valla menos vencida', headers, rows, 'valla_menos_vencida.pdf');
 }
 
+function descargarProgramacionPDF() {
+  const fecha = document.getElementById('pdf_fecha_sel').value;
+  const nombreDe = window.__nombreEquipoPartidos || {};
+  const partidos = Object.values(window.__matchesData || {}).filter(m => String(m.jornada) === String(fecha));
+  partidos.sort((a, b) => (a.hora || '').localeCompare(b.hora || ''));
+  const headers = ['Local', 'Visitante', 'Día', 'Hora', 'Cancha'];
+  const rows = partidos.map(m => [nombreDe[m.equipoA] || '—', nombreDe[m.equipoB] || '—', m.fecha || '—', m.hora || '—', m.cancha || '—']);
+  descargarTablaPDF('Programación — Fecha ' + fecha, headers, rows, 'fecha_' + fecha + '_programacion.pdf');
+}
+
 async function orgResumenHtml() {
   const [teams, matches, tarjetas, golesTodos, players] = [
     await gsCall('getEquipos'), await gsCall('getPartidos'), await gsCall('getTarjetasTodas'),
@@ -263,7 +273,7 @@ async function orgResumenHtml() {
     html += `<div style="overflow-x:auto"><table class="resumen"><thead><tr>
       <th>#</th><th>Equipo</th><th>PJ</th><th>Pts</th><th>GF</th><th>GC</th><th>DG</th><th>TA</th><th>TR</th>
     </tr></thead><tbody>` +
-      posiciones.map((t, i) => `<tr><td>${i + 1}</td><td>${esc(t.nombre)}</td><td>${t.pj}</td><td><strong>${t.pts}</strong></td><td>${t.gf}</td><td>${t.gc}</td><td>${t.dg > 0 ? '+' : ''}${t.dg}</td><td>${t.ta}</td><td>${t.tr}</td></tr>`).join('') +
+      posiciones.map((t, i) => `<tr><td>${i + 1}</td><td>${esc(t.nombre)}</td><td>${t.pj}</td><td><strong>${t.pts}</strong></td><td>${t.gf}</td><td>${t.gc}</td><td>${t.dg > 0 ? '+' : ''}${t.dg}</td><td><span class="badge" style="color:#7A4E00;background:#FDECC8">${t.ta}</span></td><td><span class="badge" style="color:#B3261E;background:#FBEAE9">${t.tr}</span></td></tr>`).join('') +
       '</tbody></table></div>';
     html += '<p class="muted" style="margin-top:8px">Desempate en este orden: puntos → diferencia de goles → menos tarjetas (amarillas + rojas).</p>';
   }
@@ -446,7 +456,16 @@ async function orgPartidosHtml() {
   const nombreDe = {}; teams.forEach(t => nombreDe[t.id] = t.nombre);
   window.__matchesData = {};
   matches.forEach(m => { window.__matchesData[m.id] = m; });
+  window.__nombreEquipoPartidos = nombreDe;
+  const fechas = [...new Set(matches.map(m => Number(m.jornada)).filter(j => !isNaN(j) && j > 0))].sort((a, b) => a - b);
   let html = `<h2 class="bebas">Partidos</h2><p class="sub">Programa partidos y revisa alineaciones y cambios.</p>`;
+  if (fechas.length > 0) {
+    html += `<div class="card">
+      <div class="muted" style="margin-bottom:8px">Descargar la programación de una fecha</div>
+      <select id="pdf_fecha_sel">${fechas.map(j=>`<option value="${j}">Fecha ${j}</option>`).join('')}</select>
+      <button class="btn-ghost" style="width:100%;margin-top:6px" onclick="descargarProgramacionPDF()">Descargar PDF</button>
+    </div>`;
+  }
   if (matches.length === 0) html += '<p class="muted">Aún no hay partidos programados.</p>';
   for (const m of matches) {
     html += `<div class="card">
@@ -471,7 +490,7 @@ async function orgPartidosHtml() {
     <div id="m_obs_wrap" style="display:none">
       <textarea id="m_obs" rows="3" placeholder="Observación (motivo del cambio, ej: se aplazó por lluvia)" style="width:100%;padding:12px;border-radius:8px;border:1px solid #d8ded8;font-family:inherit;font-size:16px;margin-bottom:8px"></textarea>
     </div>
-    <button class="btn-primary" onclick="submitMatch()">Programar partido</button>
+    <button class="btn-primary" id="matchSubmitBtn" onclick="submitMatch()">Programar partido</button>
     <button class="btn-ghost" onclick="cerrarMatchForm()">Cancelar</button>
   </div>
   <button class="btn-add" id="addMatchBtn" onclick="abrirMatchForm()">+ Programar partido</button>`;
@@ -517,20 +536,31 @@ function editarPartidoForm(matchId) {
 }
 
 async function submitMatch() {
+  const btn = document.getElementById('matchSubmitBtn');
+  if (btn.disabled) return;
   const id = document.getElementById('m_id').value;
   const fecha = document.getElementById('m_fecha').value;
   const hora = document.getElementById('m_hora').value;
   const cancha = document.getElementById('m_cancha').value;
-  if (id) {
-    const obs = document.getElementById('m_obs').value.trim();
-    await gsCall('editarPartido', id, fecha, hora, cancha, obs);
-  } else {
-    const jornada = document.getElementById('m_jornada').value;
-    const a = document.getElementById('m_a').value, b = document.getElementById('m_b').value;
-    if (!jornada || !a || !b || a===b) return;
-    await gsCall('addPartido', Number(jornada), fecha, a, b, hora, cancha);
+  const jornada = document.getElementById('m_jornada').value;
+  const a = document.getElementById('m_a').value, b = document.getElementById('m_b').value;
+  if (!id && (!jornada || !a || !b || a===b)) return;
+  btn.disabled = true;
+  const textoOriginal = btn.textContent;
+  btn.textContent = 'Guardando…';
+  try {
+    if (id) {
+      const obs = document.getElementById('m_obs').value.trim();
+      await gsCall('editarPartido', id, fecha, hora, cancha, obs);
+    } else {
+      await gsCall('addPartido', Number(jornada), fecha, a, b, hora, cancha);
+    }
+    renderOrg();
+  } catch (e) {
+    alert(e && e.message ? e.message : 'No se pudo guardar el partido.');
+    btn.disabled = false;
+    btn.textContent = textoOriginal;
   }
-  renderOrg();
 }
 
 async function verPartido(matchId) {
