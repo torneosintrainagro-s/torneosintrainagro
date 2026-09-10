@@ -163,7 +163,7 @@ function cerrarSesion() { STATE = { tab: null, rol: null, team: null }; renderPi
 
 // ================= ORGANIZADOR =================
 async function renderOrg() {
-  const tabs = [['resumen','Resumen'],['equipos','Equipos'],['carnets','Carnets'],['partidos','Partidos'],['tarjetas','Amonestaciones'],['actividad','Actividad']];
+  const tabs = [['resumen','Resumen'],['equipos','Equipos'],['carnets','Carnets'],['partidos','Partidos'],['tarjetas','Amonestaciones']];
   app.innerHTML = '<div id="content"></div>' + tabBarHtml(tabs, STATE.tab, 'renderOrg');
   const content = document.getElementById('content');
   if (STATE.tab === 'resumen') content.innerHTML = await orgResumenHtml();
@@ -171,7 +171,6 @@ async function renderOrg() {
   if (STATE.tab === 'carnets') content.innerHTML = await orgCarnetsHtml();
   if (STATE.tab === 'partidos') content.innerHTML = await orgPartidosHtml();
   if (STATE.tab === 'tarjetas') content.innerHTML = await orgTarjetasHtml();
-  if (STATE.tab === 'actividad') content.innerHTML = await actividadHtml();
 }
 
 function tabBarHtml(tabs, active, renderFn) {
@@ -667,16 +666,6 @@ async function orgEliminarTarjeta(id) {
     alert(e.message);
   }
   renderOrg();
-}
-
-async function actividadHtml() {
-  const activity = await gsCall('getActividad');
-  let html = `<h2 class="bebas">Actividad</h2><p class="sub">Alineaciones confirmadas y cambios, en orden.</p>`;
-  if (activity.length === 0) html += '<p class="muted">Todavía no hay novedades.</p>';
-  activity.forEach(a => {
-    html += `<div class="card"><div>${esc(a.texto)}</div><div class="muted" style="margin-top:2px">${fmtTime(a.ts)}</div></div>`;
-  });
-  return html;
 }
 
 function playerCardHtml(p, equipoNombre, orgView) {
