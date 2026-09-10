@@ -88,6 +88,11 @@ const STATUS = {
 
 function fmtTime(iso){ try { const d=new Date(iso); return d.toLocaleString('es-CO',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}); } catch(e){ return iso; } }
 function esc(s){ return (s||'').toString().replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function fmtFechaPartido(iso) {
+  if (!iso) return '';
+  const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? `${m[3]}-${m[2]}-${m[1]}` : String(iso);
+}
 function verFoto(url) {
   if (!url) return;
   const box = document.createElement('div');
@@ -208,7 +213,7 @@ function descargarProgramacionPDF() {
   const partidos = Object.values(window.__matchesData || {}).filter(m => String(m.jornada) === String(fecha));
   partidos.sort((a, b) => (a.hora || '').localeCompare(b.hora || ''));
   const headers = ['Local', 'Visitante', 'Día', 'Hora', 'Cancha'];
-  const rows = partidos.map(m => [nombreDe[m.equipoA] || '—', nombreDe[m.equipoB] || '—', m.fecha || '—', m.hora || '—', m.cancha || '—']);
+  const rows = partidos.map(m => [nombreDe[m.equipoA] || '—', nombreDe[m.equipoB] || '—', fmtFechaPartido(m.fecha) || '—', m.hora || '—', m.cancha || '—']);
   descargarTablaPDF('Programación — Fecha ' + fecha, headers, rows, 'fecha_' + fecha + '_programacion.pdf');
 }
 
@@ -471,7 +476,7 @@ async function orgPartidosHtml() {
     html += `<div class="card">
       <div onclick="verPartido('${m.id}')" style="cursor:pointer">
         <div style="font-weight:600">${esc(m.nombre)}</div>
-        <div class="muted">${esc(nombreDe[m.equipoA])} vs ${esc(nombreDe[m.equipoB])}${m.fecha?' · '+esc(m.fecha):''}${m.hora?' · '+esc(m.hora):''}</div>
+        <div class="muted">${esc(nombreDe[m.equipoA])} vs ${esc(nombreDe[m.equipoB])}${m.fecha?' · '+fmtFechaPartido(m.fecha):''}${m.hora?' · '+esc(m.hora):''}</div>
         ${m.cancha?`<div class="muted">📍 ${esc(m.cancha)}</div>`:''}
         ${m.observaciones?`<div class="muted" style="color:#B8860B;margin-top:4px">⚠ ${esc(m.observaciones)}</div>`:''}
       </div>
@@ -613,7 +618,7 @@ async function verPartido(matchId) {
     return h;
   };
   content.innerHTML = `<button class="btn-ghost" onclick="renderOrg()">← Volver a partidos</button>
-    <h2 class="bebas" style="margin-top:12px">${esc(m.nombre)}</h2><p class="sub">${esc(m.fecha||'')}${m.hora?' · '+esc(m.hora):''}${m.cancha?' · 📍 '+esc(m.cancha):''}</p>
+    <h2 class="bebas" style="margin-top:12px">${esc(m.nombre)}</h2><p class="sub">${fmtFechaPartido(m.fecha)}${m.hora?' · '+esc(m.hora):''}${m.cancha?' · 📍 '+esc(m.cancha):''}</p>
     ${m.observaciones?`<p class="muted" style="color:#B8860B">⚠ ${esc(m.observaciones)}</p>`:''}` +
     resultadoHtml + (await blockHtml(teamA)) + (await blockHtml(teamB));
 }
@@ -729,7 +734,7 @@ async function delegatePartidosHtml() {
     html += `<div class="card row" style="cursor:pointer;align-items:center" onclick="verPartidoDelegado('${m.id}')">
       <div style="flex:1">
         <div style="font-weight:600">${esc(m.nombre)}</div>
-        <div class="muted">vs ${esc(rival||'—')}${m.fecha?' · '+esc(m.fecha):''}${m.hora?' · '+esc(m.hora):''}</div>
+        <div class="muted">vs ${esc(rival||'—')}${m.fecha?' · '+fmtFechaPartido(m.fecha):''}${m.hora?' · '+esc(m.hora):''}</div>
         ${m.cancha?`<div class="muted">📍 ${esc(m.cancha)}</div>`:''}
         ${m.observaciones?`<div class="muted" style="color:#B8860B">⚠ ${esc(m.observaciones)}</div>`:''}
       </div>
@@ -789,7 +794,7 @@ async function verPartidoDelegado(matchId) {
     return h;
   };
   content.innerHTML = `<button class="btn-ghost" onclick="renderDelegate()">← Volver a partidos</button>
-    <h2 class="bebas" style="margin-top:12px">${esc(m.nombre)}</h2><p class="sub">${esc(m.fecha||'')}${m.hora?' · '+esc(m.hora):''}${m.cancha?' · 📍 '+esc(m.cancha):''}</p>
+    <h2 class="bebas" style="margin-top:12px">${esc(m.nombre)}</h2><p class="sub">${fmtFechaPartido(m.fecha)}${m.hora?' · '+esc(m.hora):''}${m.cancha?' · 📍 '+esc(m.cancha):''}</p>
     ${m.observaciones?`<p class="muted" style="color:#B8860B">⚠ ${esc(m.observaciones)}</p>`:''}` +
     resultadoHtml + (await blockHtml(teamA)) + (await blockHtml(teamB));
 }
@@ -900,10 +905,13 @@ async function delegateCarnetsHtml() {
 }
 
 async function alineacionRender(content) {
-  const matches = (await gsCall('getPartidos')).filter(m => m.equipoA === STATE.team.id || m.equipoB === STATE.team.id);
+  const [allMatches, teams] = [await gsCall('getPartidos'), await gsCall('getEquipos')];
+  const matches = allMatches.filter(m => m.equipoA === STATE.team.id || m.equipoB === STATE.team.id);
   const players = await gsCall('getJugadores', STATE.team.id);
+  const nombreEquipoDe = {}; teams.forEach(t => nombreEquipoDe[t.id] = t.nombre);
+  const rivalDe = (m) => m.equipoA === STATE.team.id ? nombreEquipoDe[m.equipoB] : nombreEquipoDe[m.equipoA];
   content.innerHTML = `<h2 class="bebas">Alineación — ${esc(STATE.team.nombre)}</h2><p class="sub">Elige titulares y suplentes de tu plantilla</p>
-    <select id="al_match" onchange="alineacionCargar()"><option value="">Elige un partido…</option>${matches.map(m=>`<option value="${m.id}">${esc(m.nombre)}${m.fecha?' · '+esc(m.fecha):''}${m.hora?' '+esc(m.hora):''}</option>`).join('')}</select>
+    <select id="al_match" onchange="alineacionCargar()"><option value="">Elige un partido…</option>${matches.map(m=>`<option value="${m.id}">${esc(m.nombre)} · vs ${esc(rivalDe(m)||'—')}${m.fecha?' · '+fmtFechaPartido(m.fecha):''}${m.hora?' '+esc(m.hora):''}${m.cancha?' · '+esc(m.cancha):''}</option>`).join('')}</select>
     <div id="al_body"></div>`;
   window.__alPlayers = players;
   window.__alMatches = matches;
@@ -988,9 +996,12 @@ async function alConfirmar(matchId) {
 }
 
 async function enVivoRender(content) {
-  const matches = (await gsCall('getPartidos')).filter(m => m.equipoA === STATE.team.id || m.equipoB === STATE.team.id);
+  const [allMatches, teams] = [await gsCall('getPartidos'), await gsCall('getEquipos')];
+  const matches = allMatches.filter(m => m.equipoA === STATE.team.id || m.equipoB === STATE.team.id);
+  const nombreEquipoDe = {}; teams.forEach(t => nombreEquipoDe[t.id] = t.nombre);
+  const rivalDe = (m) => m.equipoA === STATE.team.id ? nombreEquipoDe[m.equipoB] : nombreEquipoDe[m.equipoA];
   content.innerHTML = `<h2 class="bebas">Partido en vivo — ${esc(STATE.team.nombre)}</h2><p class="sub">Registra los cambios a medida que ocurren</p>
-    <select id="ev_match" onchange="enVivoCargar()"><option value="">Elige un partido…</option>${matches.map(m=>`<option value="${m.id}">${esc(m.nombre)}${m.fecha?' · '+esc(m.fecha):''}${m.hora?' '+esc(m.hora):''}</option>`).join('')}</select>
+    <select id="ev_match" onchange="enVivoCargar()"><option value="">Elige un partido…</option>${matches.map(m=>`<option value="${m.id}">${esc(m.nombre)} · vs ${esc(rivalDe(m)||'—')}${m.fecha?' · '+fmtFechaPartido(m.fecha):''}${m.hora?' '+esc(m.hora):''}${m.cancha?' · '+esc(m.cancha):''}</option>`).join('')}</select>
     <div id="ev_body"></div>`;
 }
 async function enVivoCargar() {
@@ -1058,7 +1069,7 @@ async function arbitroHtml() {
   const [matches, teams] = [await gsCall('getPartidos'), await gsCall('getEquipos')];
   const nombreEquipoDe = {}; teams.forEach(t => nombreEquipoDe[t.id] = t.nombre);
   let html = `<h2 class="bebas">Panel del árbitro</h2><p class="sub">Elige el partido para registrar el resultado, los goles y las tarjetas.</p>
-    <select id="ar_match" onchange="arbitroCargarPartido()"><option value="">Elige un partido…</option>${matches.map(m=>`<option value="${m.id}">${esc(m.nombre)} · ${esc(nombreEquipoDe[m.equipoA]||'—')} vs ${esc(nombreEquipoDe[m.equipoB]||'—')}${m.fecha?' · '+esc(m.fecha):''}${m.hora?' '+esc(m.hora):''}</option>`).join('')}</select>
+    <select id="ar_match" onchange="arbitroCargarPartido()"><option value="">Elige un partido…</option>${matches.map(m=>`<option value="${m.id}">${esc(m.nombre)} · ${esc(nombreEquipoDe[m.equipoA]||'—')} vs ${esc(nombreEquipoDe[m.equipoB]||'—')}${m.fecha?' · '+fmtFechaPartido(m.fecha):''}${m.hora?' '+esc(m.hora):''}${m.cancha?' · '+esc(m.cancha):''}</option>`).join('')}</select>
     <div id="ar_body"></div>`;
   return html;
 }
@@ -1084,7 +1095,7 @@ async function arbitroRedibujar() {
   const golDe = {}; goles.forEach(g => golDe[g.jugadorId] = g.goles);
   const tieneResultado = m.golesA !== '' && m.golesA !== undefined && m.golesA !== null;
 
-  let html = `<p class="muted" style="margin-top:-4px">${esc(m.nombre)}${m.fecha?' · '+esc(m.fecha):''}</p>
+  let html = `<p class="muted" style="margin-top:-4px">${esc(m.nombre)}${m.fecha?' · '+fmtFechaPartido(m.fecha):''}${m.hora?' '+esc(m.hora):''}</p>
   <div class="card">
     <div class="muted" style="margin-bottom:8px">Resultado del partido</div>
     <div class="row" style="align-items:center;gap:10px">
