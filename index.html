@@ -562,14 +562,15 @@ async function verPartido(matchId) {
   resultadoHtml += '</div>';
   const blockHtml = async (team) => {
     const players = await gsCall('getJugadores', team.id);
-    const nombreDe = {}; players.forEach(p => nombreDe[p.id] = p.nombre);
+    const nombreDe = {}, numeroDe = {}; players.forEach(p => { nombreDe[p.id] = p.nombre; numeroDe[p.id] = p.numero; });
     const lu = await gsCall('getAlineacion', matchId, team.id);
     const cambios = await gsCall('getCambios', matchId, team.id);
+    const listaJugadores = (ids) => ids.map(id => `<div>${esc(numeroDe[id]!=null?numeroDe[id]:'—')} · ${esc(nombreDe[id]||'—')}</div>`).join('');
     let h = `<div class="card"><div style="font-weight:600;margin-bottom:6px">${esc(team.nombre)}</div>`;
     if (!lu) { h += '<p class="muted">El delegado aún no confirma la alineación.</p>'; }
     else {
-      h += `<div class="muted">Titulares</div><div style="margin-bottom:8px">${lu.titulares.map(id=>esc(nombreDe[id]||'—')).join(', ')}</div>`;
-      h += `<div class="muted">Suplentes</div><div>${lu.suplentes.map(id=>esc(nombreDe[id]||'—')).join(', ')||'—'}</div>`;
+      h += `<div class="muted">Titulares (${lu.titulares.length})</div><div style="margin-bottom:8px">${listaJugadores(lu.titulares)}</div>`;
+      h += `<div class="muted">Suplentes (${lu.suplentes.length})</div><div>${listaJugadores(lu.suplentes) || '—'}</div>`;
     }
     if (cambios.length) {
       h += '<div style="margin-top:10px;border-top:1px solid #eef1ee;padding-top:8px"><div class="muted">Cambios</div>';
@@ -737,14 +738,15 @@ async function verPartidoDelegado(matchId) {
   resultadoHtml += '</div>';
   const blockHtml = async (team) => {
     const players = await gsCall('getJugadores', team.id);
-    const nombreDe = {}; players.forEach(p => nombreDe[p.id] = p.nombre);
+    const nombreDe = {}, numeroDe = {}; players.forEach(p => { nombreDe[p.id] = p.nombre; numeroDe[p.id] = p.numero; });
     const lu = await gsCall('getAlineacion', matchId, team.id);
     const cambios = await gsCall('getCambios', matchId, team.id);
+    const listaJugadores = (ids) => ids.map(id => `<div>${esc(numeroDe[id]!=null?numeroDe[id]:'—')} · ${esc(nombreDe[id]||'—')}</div>`).join('');
     let h = `<div class="card"><div style="font-weight:600;margin-bottom:6px">${esc(team.nombre)}</div>`;
     if (!lu) { h += '<p class="muted">Alineación no confirmada.</p>'; }
     else {
-      h += `<div class="muted">Titulares</div><div style="margin-bottom:8px">${lu.titulares.map(id=>esc(nombreDe[id]||'—')).join(', ')}</div>`;
-      h += `<div class="muted">Suplentes</div><div>${lu.suplentes.map(id=>esc(nombreDe[id]||'—')).join(', ')||'—'}</div>`;
+      h += `<div class="muted">Titulares (${lu.titulares.length})</div><div style="margin-bottom:8px">${listaJugadores(lu.titulares)}</div>`;
+      h += `<div class="muted">Suplentes (${lu.suplentes.length})</div><div>${listaJugadores(lu.suplentes) || '—'}</div>`;
     }
     if (cambios.length) {
       h += '<div style="margin-top:10px;border-top:1px solid #eef1ee;padding-top:8px"><div class="muted">Cambios</div>';
@@ -1023,9 +1025,10 @@ async function renderArbitro() {
 }
 
 async function arbitroHtml() {
-  const matches = await gsCall('getPartidos');
+  const [matches, teams] = [await gsCall('getPartidos'), await gsCall('getEquipos')];
+  const nombreEquipoDe = {}; teams.forEach(t => nombreEquipoDe[t.id] = t.nombre);
   let html = `<h2 class="bebas">Panel del árbitro</h2><p class="sub">Elige el partido para registrar el resultado, los goles y las tarjetas.</p>
-    <select id="ar_match" onchange="arbitroCargarPartido()"><option value="">Elige un partido…</option>${matches.map(m=>`<option value="${m.id}">${esc(m.nombre)}${m.fecha?' · '+esc(m.fecha):''}${m.hora?' '+esc(m.hora):''}</option>`).join('')}</select>
+    <select id="ar_match" onchange="arbitroCargarPartido()"><option value="">Elige un partido…</option>${matches.map(m=>`<option value="${m.id}">${esc(m.nombre)} · ${esc(nombreEquipoDe[m.equipoA]||'—')} vs ${esc(nombreEquipoDe[m.equipoB]||'—')}${m.fecha?' · '+esc(m.fecha):''}${m.hora?' '+esc(m.hora):''}</option>`).join('')}</select>
     <div id="ar_body"></div>`;
   return html;
 }
