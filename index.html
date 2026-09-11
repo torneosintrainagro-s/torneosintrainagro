@@ -217,10 +217,10 @@ function descargarProgramacionPDF() {
 }
 
 async function orgResumenHtml() {
-  const [teams, matches, tarjetas, golesTodos, players] = [
-    await gsCall('getEquipos'), await gsCall('getPartidos'), await gsCall('getTarjetasTodas'),
-    await gsCall('getGolesTodos'), await gsCall('getJugadoresTodos')
-  ];
+  const [teams, matches, tarjetas, golesTodos, players] = await Promise.all([
+    gsCall('getEquipos'), gsCall('getPartidos'), gsCall('getTarjetasTodas'),
+    gsCall('getGolesTodos'), gsCall('getJugadoresTodos')
+  ]);
 
   // ---- Tabla de posiciones ----
   const statsDe = {};
@@ -313,7 +313,7 @@ async function orgResumenHtml() {
 }
 
 async function orgEquiposHtml() {
-  const [teams, players] = [await gsCall('getEquipos'), await gsCall('getJugadoresTodos')];
+  const [teams, players] = await Promise.all([gsCall('getEquipos'), gsCall('getJugadoresTodos')]);
   const countDe = {};
   players.forEach(p => { countDe[p.equipoId] = (countDe[p.equipoId] || 0) + 1; });
   window.__teamsData = {};
@@ -407,7 +407,7 @@ async function regenerarPin(equipoId) {
 }
 
 async function orgCarnetsHtml() {
-  const [teams, players] = [await gsCall('getEquipos'), await gsCall('getJugadoresTodos')];
+  const [teams, players] = await Promise.all([gsCall('getEquipos'), gsCall('getJugadoresTodos')]);
   const countDe = {}, pendDe = {};
   players.forEach(p => {
     countDe[p.equipoId] = (countDe[p.equipoId] || 0) + 1;
@@ -434,7 +434,7 @@ async function verCarnetsEquipo(equipoId) {
   const content = document.getElementById('content');
   content.innerHTML = '<p class="muted">Cargando…</p>';
   window.__currentOrgTeamId = equipoId;
-  const [teams, players] = [await gsCall('getEquipos'), await gsCall('getJugadoresTodos')];
+  const [teams, players] = await Promise.all([gsCall('getEquipos'), gsCall('getJugadoresTodos')]);
   const team = teams.find(t => t.id === equipoId);
   const teamPlayers = players.filter(p => p.equipoId === equipoId);
   let html = `<button class="btn-ghost" onclick="renderOrg()">← Volver a equipos</button>
@@ -456,7 +456,7 @@ async function orgRevocarAutorizacion(id) {
 }
 
 async function orgPartidosHtml() {
-  const [matches, teams] = [await gsCall('getPartidos'), await gsCall('getEquipos')];
+  const [matches, teams] = await Promise.all([gsCall('getPartidos'), gsCall('getEquipos')]);
   const nombreDe = {}; teams.forEach(t => nombreDe[t.id] = t.nombre);
   window.__matchesData = {};
   matches.forEach(m => { window.__matchesData[m.id] = m; });
@@ -568,12 +568,12 @@ async function submitMatch() {
 }
 
 async function verPartido(matchId) {
-  const [matches, teams] = [await gsCall('getPartidos'), await gsCall('getEquipos')];
+  const [matches, teams] = await Promise.all([gsCall('getPartidos'), gsCall('getEquipos')]);
   const m = matches.find(x => x.id === matchId);
   const teamA = teams.find(t => t.id === m.equipoA), teamB = teams.find(t => t.id === m.equipoB);
   const content = document.getElementById('content');
   content.innerHTML = '<p class="muted">Cargando…</p>';
-  const [playersA, playersB, goles] = [await gsCall('getJugadores', teamA.id), await gsCall('getJugadores', teamB.id), await gsCall('getGoles', matchId)];
+  const [playersA, playersB, goles] = await Promise.all([gsCall('getJugadores', teamA.id), gsCall('getJugadores', teamB.id), gsCall('getGoles', matchId)]);
   const nombreJugadorDe = {}; [...playersA, ...playersB].forEach(p => nombreJugadorDe[p.id] = p.nombre);
   const tieneResultado = m.golesA !== '' && m.golesA !== undefined && m.golesA !== null;
   let resultadoHtml = `<div class="card" style="text-align:center">`;
@@ -594,11 +594,11 @@ async function verPartido(matchId) {
     </div>`;
   }
   resultadoHtml += '</div>';
-  const blockHtml = async (team) => {
-    const players = await gsCall('getJugadores', team.id);
+  const blockHtml = async (team, players) => {
+    const [lu, cambios] = await Promise.all([
+      gsCall('getAlineacion', matchId, team.id), gsCall('getCambios', matchId, team.id)
+    ]);
     const nombreDe = {}, numeroDe = {}; players.forEach(p => { nombreDe[p.id] = p.nombre; numeroDe[p.id] = p.numero; });
-    const lu = await gsCall('getAlineacion', matchId, team.id);
-    const cambios = await gsCall('getCambios', matchId, team.id);
     const listaJugadores = (ids) => ids.map(id => `<div>${esc(numeroDe[id]!=null?numeroDe[id]:'—')} · ${esc(nombreDe[id]||'—')}</div>`).join('');
     let h = `<div class="card"><div style="font-weight:600;margin-bottom:6px">${esc(team.nombre)}</div>`;
     if (!lu) { h += '<p class="muted">El delegado aún no confirma la alineación.</p>'; }
@@ -616,14 +616,15 @@ async function verPartido(matchId) {
     h += '</div>';
     return h;
   };
+  const [htmlA, htmlB] = await Promise.all([blockHtml(teamA, playersA), blockHtml(teamB, playersB)]);
   content.innerHTML = `<button class="btn-ghost" onclick="renderOrg()">← Volver a partidos</button>
     <h2 class="bebas" style="margin-top:12px">${esc(m.nombre)}</h2><p class="sub">${fmtFechaPartido(m.fecha)}${m.hora?' · '+esc(m.hora):''}${m.cancha?' · 📍 '+esc(m.cancha):''}</p>
     ${m.observaciones?`<p class="muted" style="color:#B8860B">⚠ ${esc(m.observaciones)}</p>`:''}` +
-    resultadoHtml + (await blockHtml(teamA)) + (await blockHtml(teamB));
+    resultadoHtml + htmlA + htmlB;
 }
 
 async function orgTarjetasHtml() {
-  const [tarjetas, teams, players, matches] = [await gsCall('getTarjetasTodas'), await gsCall('getEquipos'), await gsCall('getJugadoresTodos'), await gsCall('getPartidos')];
+  const [tarjetas, teams, players, matches] = await Promise.all([gsCall('getTarjetasTodas'), gsCall('getEquipos'), gsCall('getJugadoresTodos'), gsCall('getPartidos')]);
   const nombreEquipoDe = {}; teams.forEach(t => nombreEquipoDe[t.id] = t.nombre);
   const nombreJugadorDe = {}; players.forEach(p => nombreJugadorDe[p.id] = '#' + esc(p.numero) + ' ' + esc(p.nombre));
   const nombrePartidoDe = {}; matches.forEach(m => nombrePartidoDe[m.id] = m.nombre);
@@ -705,7 +706,7 @@ async function renderDelegate() {
 }
 
 async function delegatePartidosHtml() {
-  const [matches, teams] = [await gsCall('getPartidos'), await gsCall('getEquipos')];
+  const [matches, teams] = await Promise.all([gsCall('getPartidos'), gsCall('getEquipos')]);
   const misPartidos = matches.filter(m => m.equipoA === STATE.team.id || m.equipoB === STATE.team.id)
     .sort((a, b) => (Number(a.jornada) || 0) - (Number(b.jornada) || 0));
   const nombreEquipoDe = {}; teams.forEach(t => nombreEquipoDe[t.id] = t.nombre);
@@ -736,10 +737,10 @@ async function delegatePartidosHtml() {
 async function verPartidoDelegado(matchId) {
   const content = document.getElementById('content');
   content.innerHTML = '<p class="muted">Cargando…</p>';
-  const [matches, teams] = [await gsCall('getPartidos'), await gsCall('getEquipos')];
+  const [matches, teams] = await Promise.all([gsCall('getPartidos'), gsCall('getEquipos')]);
   const m = matches.find(x => x.id === matchId);
   const teamA = teams.find(t => t.id === m.equipoA), teamB = teams.find(t => t.id === m.equipoB);
-  const [playersA, playersB, goles] = [await gsCall('getJugadores', teamA.id), await gsCall('getJugadores', teamB.id), await gsCall('getGoles', matchId)];
+  const [playersA, playersB, goles] = await Promise.all([gsCall('getJugadores', teamA.id), gsCall('getJugadores', teamB.id), gsCall('getGoles', matchId)]);
   const nombreJugadorDe = {}; [...playersA, ...playersB].forEach(p => nombreJugadorDe[p.id] = p.nombre);
   const tieneResultado = m.golesA !== '' && m.golesA !== undefined && m.golesA !== null;
   let resultadoHtml = `<div class="card" style="text-align:center">`;
@@ -760,11 +761,11 @@ async function verPartidoDelegado(matchId) {
     </div>`;
   }
   resultadoHtml += '</div>';
-  const blockHtml = async (team) => {
-    const players = await gsCall('getJugadores', team.id);
+  const blockHtml = async (team, players) => {
+    const [lu, cambios] = await Promise.all([
+      gsCall('getAlineacion', matchId, team.id), gsCall('getCambios', matchId, team.id)
+    ]);
     const nombreDe = {}, numeroDe = {}; players.forEach(p => { nombreDe[p.id] = p.nombre; numeroDe[p.id] = p.numero; });
-    const lu = await gsCall('getAlineacion', matchId, team.id);
-    const cambios = await gsCall('getCambios', matchId, team.id);
     const listaJugadores = (ids) => ids.map(id => `<div>${esc(numeroDe[id]!=null?numeroDe[id]:'—')} · ${esc(nombreDe[id]||'—')}</div>`).join('');
     let h = `<div class="card"><div style="font-weight:600;margin-bottom:6px">${esc(team.nombre)}</div>`;
     if (!lu) { h += '<p class="muted">Alineación no confirmada.</p>'; }
@@ -782,10 +783,11 @@ async function verPartidoDelegado(matchId) {
     h += '</div>';
     return h;
   };
+  const [htmlA, htmlB] = await Promise.all([blockHtml(teamA, playersA), blockHtml(teamB, playersB)]);
   content.innerHTML = `<button class="btn-ghost" onclick="renderDelegate()">← Volver a partidos</button>
     <h2 class="bebas" style="margin-top:12px">${esc(m.nombre)}</h2><p class="sub">${fmtFechaPartido(m.fecha)}${m.hora?' · '+esc(m.hora):''}${m.cancha?' · 📍 '+esc(m.cancha):''}</p>
     ${m.observaciones?`<p class="muted" style="color:#B8860B">⚠ ${esc(m.observaciones)}</p>`:''}` +
-    resultadoHtml + (await blockHtml(teamA)) + (await blockHtml(teamB));
+    resultadoHtml + htmlA + htmlB;
 }
 
 async function planillaHtml() {
@@ -894,7 +896,7 @@ async function delegateCarnetsHtml() {
 }
 
 async function alineacionRender(content) {
-  const [allMatches, teams] = [await gsCall('getPartidos'), await gsCall('getEquipos')];
+  const [allMatches, teams] = await Promise.all([gsCall('getPartidos'), gsCall('getEquipos')]);
   const matches = allMatches.filter(m => m.equipoA === STATE.team.id || m.equipoB === STATE.team.id);
   const players = await gsCall('getJugadores', STATE.team.id);
   const nombreEquipoDe = {}; teams.forEach(t => nombreEquipoDe[t.id] = t.nombre);
@@ -985,7 +987,7 @@ async function alConfirmar(matchId) {
 }
 
 async function enVivoRender(content) {
-  const [allMatches, teams] = [await gsCall('getPartidos'), await gsCall('getEquipos')];
+  const [allMatches, teams] = await Promise.all([gsCall('getPartidos'), gsCall('getEquipos')]);
   const matches = allMatches.filter(m => m.equipoA === STATE.team.id || m.equipoB === STATE.team.id);
   const nombreEquipoDe = {}; teams.forEach(t => nombreEquipoDe[t.id] = t.nombre);
   const rivalDe = (m) => m.equipoA === STATE.team.id ? nombreEquipoDe[m.equipoB] : nombreEquipoDe[m.equipoA];
@@ -1055,7 +1057,7 @@ async function renderArbitro() {
 }
 
 async function arbitroHtml() {
-  const [matches, teams] = [await gsCall('getPartidos'), await gsCall('getEquipos')];
+  const [matches, teams] = await Promise.all([gsCall('getPartidos'), gsCall('getEquipos')]);
   const nombreEquipoDe = {}; teams.forEach(t => nombreEquipoDe[t.id] = t.nombre);
   let html = `<h2 class="bebas">Panel del árbitro</h2><p class="sub">Elige el partido para registrar el resultado, los goles y las tarjetas.</p>
     <select id="ar_match" onchange="arbitroCargarPartido()"><option value="">Elige un partido…</option>${matches.map(m=>`<option value="${m.id}">${esc(m.nombre)} · ${esc(nombreEquipoDe[m.equipoA]||'—')} vs ${esc(nombreEquipoDe[m.equipoB]||'—')}${m.fecha?' · '+fmtFechaPartido(m.fecha):''}${m.hora?' '+esc(m.hora):''}${m.cancha?' · '+esc(m.cancha):''}</option>`).join('')}</select>
@@ -1068,7 +1070,7 @@ async function arbitroCargarPartido() {
   const body = document.getElementById('ar_body');
   if (!matchId) { body.innerHTML = ''; return; }
   body.innerHTML = '<p class="muted">Cargando…</p>';
-  const [matches, teams] = [await gsCall('getPartidos'), await gsCall('getEquipos')];
+  const [matches, teams] = await Promise.all([gsCall('getPartidos'), gsCall('getEquipos')]);
   const m = matches.find(x => x.id === matchId);
   const teamA = teams.find(t => t.id === m.equipoA), teamB = teams.find(t => t.id === m.equipoB);
   window.__arMatch = m; window.__arTeams = { a: teamA, b: teamB };
@@ -1078,7 +1080,7 @@ async function arbitroCargarPartido() {
 async function arbitroRedibujar() {
   const m = window.__arMatch, teamA = window.__arTeams.a, teamB = window.__arTeams.b;
   const body = document.getElementById('ar_body');
-  const [tarjetas, playersA, playersB, goles] = [await gsCall('getTarjetas', m.id), await gsCall('getJugadores', teamA.id), await gsCall('getJugadores', teamB.id), await gsCall('getGoles', m.id)];
+  const [tarjetas, playersA, playersB, goles] = await Promise.all([gsCall('getTarjetas', m.id), gsCall('getJugadores', teamA.id), gsCall('getJugadores', teamB.id), gsCall('getGoles', m.id)]);
   const nombreEquipoDe = {}; [teamA, teamB].forEach(t => nombreEquipoDe[t.id] = t.nombre);
   const nombreJugadorDe = {}; [...playersA, ...playersB].forEach(p => nombreJugadorDe[p.id] = '#' + esc(p.numero) + ' ' + esc(p.nombre));
   const golDe = {}; goles.forEach(g => golDe[g.jugadorId] = g.goles);
@@ -1154,7 +1156,7 @@ async function arbitroGuardarResultado() {
 
 async function arbitroGuardarGoles() {
   const teamA = window.__arTeams.a, teamB = window.__arTeams.b, m = window.__arMatch;
-  const [playersA, playersB] = [await gsCall('getJugadores', teamA.id), await gsCall('getJugadores', teamB.id)];
+  const [playersA, playersB] = await Promise.all([gsCall('getJugadores', teamA.id), gsCall('getJugadores', teamB.id)]);
   for (const p of playersA) {
     const v = document.getElementById('gol_' + p.id).value;
     await gsCall('guardarGolJugador', m.id, p.id, teamA.id, Number(v) || 0);
