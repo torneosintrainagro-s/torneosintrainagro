@@ -64,7 +64,22 @@
 <script>
 const API_URL = 'https://script.google.com/macros/s/AKfycbwSPtk7m5Ulc2EcSQ486KZFoJiL91dG9sZeKXIFb07oWifRyuQmVobIVlJvFJUawdPK/exec';
 
+// Mientras navegas entre pestañas, estas consultas de solo lectura se reutilizan
+// por unos segundos en vez de volver a pedirlas — cualquier acción que guarde algo
+// (todo lo que no está en esta lista) borra este caché para no mostrar datos viejos.
+const GS_CACHEABLE = ['getEquipos','getPartidos','getJugadores','getJugadoresTodos','getAlineacion','getCambios','getTarjetas','getTarjetasTodas','getGoles','getGolesTodos'];
+const GS_CACHE_TTL_MS = 15000;
+window.__gsCache = window.__gsCache || {};
+
 function gsCall(fn, ...args) {
+  const cacheable = GS_CACHEABLE.includes(fn);
+  const cacheKey = fn + '|' + JSON.stringify(args);
+  if (cacheable) {
+    const hit = window.__gsCache[cacheKey];
+    if (hit && (Date.now() - hit.t) < GS_CACHE_TTL_MS) {
+      return Promise.resolve(hit.data);
+    }
+  }
   return fetch(API_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
@@ -73,6 +88,11 @@ function gsCall(fn, ...args) {
     .then(r => r.json())
     .then(res => {
       if (!res.ok) throw new Error(res.error || 'Error desconocido');
+      if (cacheable) {
+        window.__gsCache[cacheKey] = { data: res.data, t: Date.now() };
+      } else {
+        window.__gsCache = {};
+      }
       return res.data;
     });
 }
