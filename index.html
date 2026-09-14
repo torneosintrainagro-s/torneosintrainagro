@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html>
+<html lang="es">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -64,65 +64,47 @@
 <script>
 const API_URL = 'https://script.google.com/macros/s/AKfycbwSPtk7m5Ulc2EcSQ486KZFoJiL91dG9sZeKXIFb07oWifRyuQmVobIVlJvFJUawdPK/exec';
 
-// Mientras navegas entre pestañas, estas consultas de solo lectura se reutilizan
-// por unos segundos en vez de volver a pedirlas — cualquier acción que guarde algo
-// (todo lo que no está en esta lista) borra este caché para no mostrar datos viejos.
-const GS_CACHEABLE = ['getEquipos','getPartidos','getJugadores','getJugadoresTodos','getAlineacion','getCambios','getTarjetas','getTarjetasTodas','getGoles','getGolesTodos'];
-const GS_CACHE_TTL_MS = 15000;
-window.__gsCache = window.__gsCache || {};
+// Memoria local ultra rápida para no recargar constantemente la base de datos de Google
+window.__torneoStore = JSON.parse(localStorage.getItem('torneo_db_v1') || '{}');
 
-function gsCall(fn, ...args) {
-  const cacheable = GS_CACHEABLE.includes(fn);
-  const cacheKey = fn + '|' + JSON.stringify(args);
-  if (cacheable) {
-    const hit = window.__gsCache[cacheKey];
-    if (hit && (Date.now() - hit.t) < GS_CACHE_TTL_MS) {
-      return Promise.resolve(hit.data);
-    }
-  }
-  return fetch(API_URL, {
+function guardarStoreLocal(data) {
+  window.__torneoStore = data;
+  try { localStorage.setItem('torneo_db_v1', JSON.stringify(data)); } catch(e){}
+}
+
+async function gsCall(fn, ...args) {
+  const res = await fetch(API_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
     body: JSON.stringify({ action: fn, params: args })
-  })
-    .then(r => r.json())
-    .then(res => {
-      if (!res.ok) throw new Error(res.error || 'Error desconocido');
-      if (cacheable) {
-        window.__gsCache[cacheKey] = { data: res.data, t: Date.now() };
-      } else {
-        window.__gsCache = {};
-      }
-      return res.data;
-    });
+  });
+  const json = await res.json();
+  if (!json.ok) throw new Error(json.error || 'Error en la petición');
+  return json.data;
 }
 
-const POSITIONS = ['Portero','Defensa','Volante','Delantero'];
-const RH_TYPES = ['O+','O-','A+','A-','B+','B-','AB+','AB-'];
-const CANCHAS = ['Cancha la Agrícola', 'Cancha la Floresta', 'Cancha Unidad Deportiva'];
-const STATUS = {
-  habilitado: {label:'Habilitado', color:'#2E7D46', bg:'#E7F3EA'},
-  suspendido: {label:'Suspendido', color:'#B3261E', bg:'#FBEAE9'},
-  lesionado:  {label:'Lesionado',  color:'#B8860B', bg:'#FBF3DC'}
-};
+// Carga acelerada: Pide todo el estado en una sola consulta batch
+async function cargarDatosTorneoBatch(forzarServidor = false) {
+  if (!forzarServidor && window.__torneoStore && window.__torneoStore.equipos) {
+    // Retornar almacenamiento local de inmediato (0ms) y actualizar silenciosamente en segundo plano
+    gsCall('getTorneoInitData').then(data => guardarStoreLocal(data)).catch(()=>{});
+    return window.__torneoStore;
+  }
+  const data = await gsCall('getTorneoInitData');
+  guardarStoreLocal(data);
+  return data;
+}
 
-function fmtTime(iso){ try { const d=new Date(iso); return d.toLocaleString('es-CO',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}); } catch(e){ return iso; } }
+const CANCHAS = ['Cancha la Agrícola', 'Cancha la Floresta', 'Cancha Unidad Deportiva'];
 function esc(s){ return (s||'').toString().replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function fmtFechaPartido(iso) {
   if (!iso) return '';
   const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})/);
   return m ? `${m[3]}-${m[2]}-${m[1]}` : String(iso);
 }
-function verFoto(url) {
-  if (!url) return;
-  const box = document.createElement('div');
-  box.className = 'lightbox';
-  box.onclick = () => box.remove();
-  box.innerHTML = `<img src="${esc(url)}">`;
-  document.body.appendChild(box);
-}
 
-function resizeImage(file, maxSize=220, quality=0.6){
+// Compresión extrema de fotos a 180px / calidad 0.4 para evitar demoras
+function resizeImage(file, maxSize=180, quality=0.4){
   return new Promise((resolve)=>{
     const reader = new FileReader();
     reader.onload = (e)=>{
@@ -148,15 +130,16 @@ function renderPinGate(errorMsg) {
   document.getElementById('whoami').innerHTML = '';
   app.innerHTML = `<div style="padding-top:24px">
     <h2 class="bebas" style="font-size:34px;margin:0 0 4px">Ingresa tu PIN</h2>
-    <p class="sub">El organizador tiene su PIN. Cada equipo tiene el suyo, distinto e independiente. Los árbitros también tienen un PIN propio. Pídele el tuyo al organizador si no lo tienes.</p>
+    <p class="sub">El organizador tiene su PIN. Cada equipo tiene el suyo. Los árbitros también tienen un PIN propio.</p>
     <div class="card">
       <input id="pinInput" class="pin-input" maxlength="6" inputmode="numeric" placeholder="••••">
       <div style="color:#B3261E;font-size:13px;margin-bottom:8px">${errorMsg ? esc(errorMsg) : ''}</div>
       <button class="btn-primary" onclick="intentarPin()">Entrar</button>
     </div>
   </div>`;
-  document.getElementById('pinInput').focus();
-  document.getElementById('pinInput').addEventListener('keydown', e => { if (e.key === 'Enter') intentarPin(); });
+  const pIn = document.getElementById('pinInput');
+  pIn.focus();
+  pIn.addEventListener('keydown', e => { if (e.key === 'Enter') intentarPin(); });
 }
 
 async function intentarPin() {
@@ -164,12 +147,16 @@ async function intentarPin() {
   if (!pin) return;
   const res = await gsCall('verificarPin', pin);
   if (!res) { renderPinGate('PIN incorrecto. Intenta de nuevo.'); return; }
+  
+  // Precargar los datos en lote antes de ingresar
+  await cargarDatosTorneoBatch(true);
+
   if (res.rol === 'organizador') {
     STATE.rol = 'organizador'; STATE.tab = 'resumen';
     document.getElementById('whoami').innerHTML = '<button onclick="cerrarSesion()">Organizador · salir</button>';
     renderOrg();
   } else if (res.rol === 'arbitro') {
-    STATE.rol = 'arbitro'; STATE.tab = 'tarjetas';
+    STATE.rol = 'arbitro'; STATE.tab = 'partidos';
     document.getElementById('whoami').innerHTML = '<button onclick="cerrarSesion()">Árbitro · salir</button>';
     renderArbitro();
   } else {
@@ -183,14 +170,14 @@ function cerrarSesion() { STATE = { tab: null, rol: null, team: null }; renderPi
 
 // ================= ORGANIZADOR =================
 async function renderOrg() {
-  const tabs = [['resumen','Resumen'],['equipos','Equipos'],['carnets','Carnets'],['partidos','Partidos'],['tarjetas','Amonestaciones']];
+  const tabs = [['resumen','Resumen'],['equipos','Equipos'],['carnets','Carnets'],['partidos','Partidos']];
   app.innerHTML = '<div id="content"></div>' + tabBarHtml(tabs, STATE.tab, 'renderOrg');
   const content = document.getElementById('content');
+  
   if (STATE.tab === 'resumen') content.innerHTML = await orgResumenHtml();
   if (STATE.tab === 'equipos') content.innerHTML = await orgEquiposHtml();
   if (STATE.tab === 'carnets') content.innerHTML = await orgCarnetsHtml();
   if (STATE.tab === 'partidos') content.innerHTML = await orgPartidosHtml();
-  if (STATE.tab === 'tarjetas') content.innerHTML = await orgTarjetasHtml();
 }
 
 function tabBarHtml(tabs, active, renderFn) {
@@ -214,35 +201,10 @@ function descargarPosicionesPDF() {
   descargarTablaPDF('Tabla de posiciones', headers, rows, 'tabla_posiciones.pdf');
 }
 
-function descargarGoleadoresPDF() {
-  const headers = ['#', 'Jugador', 'Equipo', 'Goles'];
-  const rows = window.__resumen.goleadores.map((g, i) => [i + 1, g.nombre, g.equipoNombre, g.goles]);
-  descargarTablaPDF('Tabla de goleadores', headers, rows, 'tabla_goleadores.pdf');
-}
-
-function descargarVallaPDF() {
-  const headers = ['#', 'Equipo', 'PJ', 'GC'];
-  const rows = window.__resumen.valla.map((t, i) => [i + 1, t.nombre, t.pj, t.gc]);
-  descargarTablaPDF('Valla menos vencida', headers, rows, 'valla_menos_vencida.pdf');
-}
-
-function descargarProgramacionPDF() {
-  const fecha = document.getElementById('pdf_fecha_sel').value;
-  const nombreDe = window.__nombreEquipoPartidos || {};
-  const partidos = Object.values(window.__matchesData || {}).filter(m => String(m.jornada) === String(fecha));
-  partidos.sort((a, b) => (a.hora || '').localeCompare(b.hora || ''));
-  const headers = ['Local', 'Visitante', 'Día', 'Hora', 'Cancha'];
-  const rows = partidos.map(m => [nombreDe[m.equipoA] || '—', nombreDe[m.equipoB] || '—', fmtFechaPartido(m.fecha) || '—', m.hora || '—', m.cancha || '—']);
-  descargarTablaPDF('Programación — Fecha ' + fecha, headers, rows, 'fecha_' + fecha + '_programacion.pdf');
-}
-
 async function orgResumenHtml() {
-  const [teams, matches, tarjetas, golesTodos, players] = await Promise.all([
-    gsCall('getEquipos'), gsCall('getPartidos'), gsCall('getTarjetasTodas'),
-    gsCall('getGolesTodos'), gsCall('getJugadoresTodos')
-  ]);
+  const data = await cargarDatosTorneoBatch();
+  const teams = data.equipos || [], matches = data.partidos || [], tarjetas = data.tarjetas || [], golesTodos = data.goles || [], players = data.jugadores || [];
 
-  // ---- Tabla de posiciones ----
   const statsDe = {};
   teams.forEach(t => { statsDe[t.id] = { id: t.id, nombre: t.nombre, pj: 0, pts: 0, gf: 0, gc: 0, ta: 0, tr: 0 }; });
   matches.forEach(m => {
@@ -267,26 +229,9 @@ async function orgResumenHtml() {
   const posiciones = Object.values(statsDe).map(s => Object.assign({}, s, { dg: s.gf - s.gc }));
   posiciones.sort((x, y) => (y.pts - x.pts) || (y.dg - x.dg) || ((x.ta + x.tr) - (y.ta + y.tr)));
 
-  // ---- Goleadores ----
-  const nombreEquipoDe = {}; teams.forEach(t => nombreEquipoDe[t.id] = t.nombre);
-  const nombreJugadorDe = {}; players.forEach(p => nombreJugadorDe[p.id] = p.nombre);
-  const golesDe = {};
-  golesTodos.forEach(g => {
-    if (!golesDe[g.jugadorId]) golesDe[g.jugadorId] = { jugadorId: g.jugadorId, equipoId: g.equipoId, goles: 0 };
-    golesDe[g.jugadorId].goles += Number(g.goles) || 0;
-  });
-  const goleadores = Object.values(golesDe)
-    .map(g => Object.assign({}, g, { nombre: nombreJugadorDe[g.jugadorId] || '—', equipoNombre: nombreEquipoDe[g.equipoId] || '—' }))
-    .filter(g => g.goles > 0)
-    .sort((a, b) => b.goles - a.goles);
+  window.__resumen = { posiciones };
 
-  // ---- Valla menos vencida ----
-  const valla = posiciones.filter(t => t.pj > 0).slice().sort((a, b) => (a.gc - b.gc) || (a.pj - b.pj));
-
-  window.__resumen = { posiciones, goleadores, valla };
-
-  let html = `<h2 class="bebas">Resumen del torneo</h2><p class="sub">Se actualiza solo, con los resultados, goles y tarjetas que registran los árbitros.</p>`;
-
+  let html = `<h2 class="bebas">Resumen del torneo</h2><p class="sub">Actualizado en tiempo real.</p>`;
   html += `<div class="card">
     <div class="row" style="align-items:center;margin-bottom:8px">
       <div style="flex:1;font-weight:600">Tabla de posiciones</div>
@@ -299,55 +244,29 @@ async function orgResumenHtml() {
     </tr></thead><tbody>` +
       posiciones.map((t, i) => `<tr><td>${i + 1}</td><td>${esc(t.nombre)}</td><td>${t.pj}</td><td><strong>${t.pts}</strong></td><td>${t.gf}</td><td>${t.gc}</td><td>${t.dg > 0 ? '+' : ''}${t.dg}</td><td><span class="badge" style="color:#7A4E00;background:#FDECC8">${t.ta}</span></td><td><span class="badge" style="color:#B3261E;background:#FBEAE9">${t.tr}</span></td></tr>`).join('') +
       '</tbody></table></div>';
-    html += '<p class="muted" style="margin-top:8px">Desempate en este orden: puntos → diferencia de goles → menos tarjetas (amarillas + rojas).</p>';
   }
   html += '</div>';
-
-  html += `<div class="card">
-    <div class="row" style="align-items:center;margin-bottom:8px">
-      <div style="flex:1;font-weight:600">Tabla de goleadores</div>
-      <button class="btn-ghost" onclick="descargarGoleadoresPDF()">Descargar PDF</button>
-    </div>`;
-  if (goleadores.length === 0) html += '<p class="muted">Aún no hay goles registrados.</p>';
-  else {
-    html += `<div style="overflow-x:auto"><table class="resumen"><thead><tr><th>#</th><th>Jugador</th><th>Equipo</th><th>Goles</th></tr></thead><tbody>` +
-      goleadores.map((g, i) => `<tr><td>${i + 1}</td><td>${esc(g.nombre)}</td><td>${esc(g.equipoNombre)}</td><td><strong>${g.goles}</strong></td></tr>`).join('') +
-      '</tbody></table></div>';
-  }
-  html += '</div>';
-
-  html += `<div class="card">
-    <div class="row" style="align-items:center;margin-bottom:8px">
-      <div style="flex:1;font-weight:600">Valla menos vencida</div>
-      <button class="btn-ghost" onclick="descargarVallaPDF()">Descargar PDF</button>
-    </div>`;
-  if (valla.length === 0) html += '<p class="muted">Aún no hay partidos con resultado registrado.</p>';
-  else {
-    html += `<div style="overflow-x:auto"><table class="resumen"><thead><tr><th>#</th><th>Equipo</th><th>PJ</th><th>GC</th></tr></thead><tbody>` +
-      valla.map((t, i) => `<tr><td>${i + 1}</td><td>${esc(t.nombre)}</td><td>${t.pj}</td><td><strong>${t.gc}</strong></td></tr>`).join('') +
-      '</tbody></table></div>';
-  }
-  html += '</div>';
-
   return html;
 }
 
 async function orgEquiposHtml() {
-  const [teams, players] = await Promise.all([gsCall('getEquipos'), gsCall('getJugadoresTodos')]);
+  const data = await cargarDatosTorneoBatch();
+  const teams = data.equipos || [], players = data.jugadores || [];
   const countDe = {};
   players.forEach(p => { countDe[p.equipoId] = (countDe[p.equipoId] || 0) + 1; });
   window.__teamsData = {};
   teams.forEach(t => { window.__teamsData[t.id] = Object.assign({}, t, { jugadores: countDe[t.id] || 0 }); });
-  let html = `<h2 class="bebas">Equipos del torneo</h2><p class="sub">${teams.length} equipo(s) inscrito(s) — agrega los que quieras, sin límite. El PIN de cada equipo es independiente: compártelo solo con su delegado.</p>`;
+
+  let html = `<h2 class="bebas">Equipos del torneo</h2><p class="sub">${teams.length} equipo(s) inscrito(s)</p>`;
   teams.forEach(t => {
     const n = countDe[t.id] || 0;
     html += `<div class="card">
       <div style="font-weight:600;font-size:16px">${esc(t.nombre)}</div>
       <div class="muted">Delegado: ${esc(t.delegado)||'—'} · DT: ${esc(t.dt)||'—'}</div>
-      <div class="muted">${n} jugador${n===1?'':'es'} inscrito${n===1?'':'s'}</div>
+      <div class="muted">${n} jugador(es)</div>
       <div class="row" style="margin-top:8px">
         <div class="bebas" style="font-size:20px;letter-spacing:3px">PIN ${esc(t.pin)}</div>
-        <button class="btn-ghost" onclick="regenerarPin('${t.id}')">Generar PIN nuevo</button>
+        <button class="btn-ghost" onclick="regenerarPin('${t.id}')">PIN nuevo</button>
       </div>
       <div class="row" style="margin-top:8px;gap:8px">
         <button class="btn-ghost" onclick="editarEquipoForm('${t.id}')">Editar</button>
@@ -370,41 +289,22 @@ async function orgEquiposHtml() {
 
 function abrirTeamForm() {
   document.getElementById('teamFormTitle').textContent = 'Nuevo equipo';
-  document.getElementById('t_id').value = '';
-  document.getElementById('t_nombre').value = '';
-  document.getElementById('t_delegado').value = '';
-  document.getElementById('t_dt').value = '';
-  document.getElementById('teamForm').style.display = 'block';
-  document.getElementById('addTeamBtn').style.display = 'none';
+  document.getElementById('t_id').value = ''; document.getElementById('t_nombre').value = '';
+  document.getElementById('t_delegado').value = ''; document.getElementById('t_dt').value = '';
+  document.getElementById('teamForm').style.display = 'block'; document.getElementById('addTeamBtn').style.display = 'none';
 }
 
 function cerrarTeamForm() {
-  document.getElementById('teamForm').style.display = 'none';
-  document.getElementById('addTeamBtn').style.display = 'block';
+  document.getElementById('teamForm').style.display = 'none'; document.getElementById('addTeamBtn').style.display = 'block';
 }
 
 function editarEquipoForm(equipoId) {
   const t = window.__teamsData[equipoId];
   if (!t) return;
-  document.getElementById('teamFormTitle').textContent = 'Editar equipo (el PIN no cambia)';
-  document.getElementById('t_id').value = t.id;
-  document.getElementById('t_nombre').value = t.nombre || '';
-  document.getElementById('t_delegado').value = t.delegado || '';
-  document.getElementById('t_dt').value = t.dt || '';
-  document.getElementById('teamForm').style.display = 'block';
-  document.getElementById('addTeamBtn').style.display = 'none';
-  document.getElementById('teamForm').scrollIntoView({ behavior: 'smooth' });
-}
-
-async function confirmarEliminarEquipo(equipoId) {
-  const t = window.__teamsData[equipoId];
-  if (!t) return;
-  const msg = t.jugadores > 0
-    ? `¿Eliminar el equipo "${t.nombre}"? Esto también borrará su planilla completa (${t.jugadores} jugador${t.jugadores === 1 ? '' : 'es'}). Esta acción no se puede deshacer.`
-    : `¿Eliminar el equipo "${t.nombre}"? Esta acción no se puede deshacer.`;
-  if (!confirm(msg)) return;
-  await gsCall('eliminarEquipo', equipoId);
-  renderOrg();
+  document.getElementById('teamFormTitle').textContent = 'Editar equipo';
+  document.getElementById('t_id').value = t.id; document.getElementById('t_nombre').value = t.nombre || '';
+  document.getElementById('t_delegado').value = t.delegado || ''; document.getElementById('t_dt').value = t.dt || '';
+  document.getElementById('teamForm').style.display = 'block'; document.getElementById('addTeamBtn').style.display = 'none';
 }
 
 async function submitTeam() {
@@ -413,841 +313,93 @@ async function submitTeam() {
   const id = document.getElementById('t_id').value;
   const delegado = document.getElementById('t_delegado').value.trim();
   const dt = document.getElementById('t_dt').value.trim();
-  if (id) {
-    await gsCall('editarEquipo', id, nombre, delegado, dt);
-  } else {
-    await gsCall('addEquipo', nombre, delegado, dt);
-  }
+  if (id) await gsCall('editarEquipo', id, nombre, delegado, dt);
+  else await gsCall('addEquipo', nombre, delegado, dt);
+  await cargarDatosTorneoBatch(true);
+  renderOrg();
+}
+
+async function confirmarEliminarEquipo(equipoId) {
+  if (!confirm('¿Eliminar equipo? Esta acción no se puede deshacer.')) return;
+  await gsCall('eliminarEquipo', equipoId);
+  await cargarDatosTorneoBatch(true);
   renderOrg();
 }
 
 async function regenerarPin(equipoId) {
   await gsCall('regenerarPinEquipo', equipoId);
+  await cargarDatosTorneoBatch(true);
   renderOrg();
 }
 
 async function orgCarnetsHtml() {
-  const [teams, players] = await Promise.all([gsCall('getEquipos'), gsCall('getJugadoresTodos')]);
-  const countDe = {}, pendDe = {};
-  players.forEach(p => {
-    countDe[p.equipoId] = (countDe[p.equipoId] || 0) + 1;
-    const autorizado = p.autorizado === true || String(p.autorizado).toUpperCase() === 'TRUE';
-    if (!autorizado) pendDe[p.equipoId] = (pendDe[p.equipoId] || 0) + 1;
-  });
-  let html = `<h2 class="bebas">Carnets del torneo</h2><p class="sub">${players.length} jugador(es) registrados en total · elige un equipo para ver sus carnets</p>`;
-  if (teams.length === 0) html += '<p class="muted">Aún no hay equipos inscritos.</p>';
+  const data = await cargarDatosTorneoBatch();
+  const teams = data.equipos || [], players = data.jugadores || [];
+  let html = `<h2 class="bebas">Carnets del torneo</h2><p class="sub">${players.length} jugador(es) registrados</p>`;
   teams.forEach(t => {
-    const n = countDe[t.id] || 0;
-    const pend = pendDe[t.id] || 0;
-    html += `<div class="card row" style="cursor:pointer;align-items:center" onclick="verCarnetsEquipo('${t.id}')">
+    const n = players.filter(p => p.equipoId === t.id).length;
+    html += `<div class="card row" style="align-items:center">
       <div style="flex:1">
         <div style="font-weight:600;font-size:16px">${esc(t.nombre)}</div>
-        <div class="muted">${n} carnet${n === 1 ? '' : 's'}${pend > 0 ? ` · ${pend} pendiente${pend === 1 ? '' : 's'} de autorizar` : ''}</div>
+        <div class="muted">${n} carnet(s)</div>
       </div>
-      <div class="bebas" style="font-size:26px;color:${pend > 0 ? '#B8860B' : '#123626'}">${n}</div>
+      <div class="bebas" style="font-size:26px;color:#123626">${n}</div>
     </div>`;
   });
   return html;
 }
 
-async function verCarnetsEquipo(equipoId) {
-  const content = document.getElementById('content');
-  content.innerHTML = '<p class="muted">Cargando…</p>';
-  window.__currentOrgTeamId = equipoId;
-  const [teams, players] = await Promise.all([gsCall('getEquipos'), gsCall('getJugadoresTodos')]);
-  const team = teams.find(t => t.id === equipoId);
-  const teamPlayers = players.filter(p => p.equipoId === equipoId);
-  let html = `<button class="btn-ghost" onclick="renderOrg()">← Volver a equipos</button>
-    <h2 class="bebas" style="margin-top:12px">Carnets — ${esc(team ? team.nombre : '')}</h2><p class="sub">${teamPlayers.length} jugador(es)</p>`;
-  if (teamPlayers.length === 0) html += '<p class="muted">Este equipo aún no tiene jugadores.</p>';
-  html += '<div class="stack">' + teamPlayers.map(p => playerCardHtml(p, null, true)).join('') + '</div>';
-  content.innerHTML = html;
-}
-
-async function orgAutorizarJugador(id) {
-  await gsCall('autorizarJugador', id);
-  if (window.__currentOrgTeamId) verCarnetsEquipo(window.__currentOrgTeamId);
-}
-
-async function orgRevocarAutorizacion(id) {
-  if (!confirm('¿Revocar la autorización de este jugador? No podrá usarse en alineaciones hasta que se autorice de nuevo.')) return;
-  await gsCall('revocarAutorizacion', id);
-  if (window.__currentOrgTeamId) verCarnetsEquipo(window.__currentOrgTeamId);
-}
-
 async function orgPartidosHtml() {
-  const [matches, teams] = await Promise.all([gsCall('getPartidos'), gsCall('getEquipos')]);
+  const data = await cargarDatosTorneoBatch();
+  const matches = data.partidos || [], teams = data.equipos || [];
   const nombreDe = {}; teams.forEach(t => nombreDe[t.id] = t.nombre);
-  window.__matchesData = {};
-  matches.forEach(m => { window.__matchesData[m.id] = m; });
-  window.__nombreEquipoPartidos = nombreDe;
-  const fechas = [...new Set(matches.map(m => Number(m.jornada)).filter(j => !isNaN(j) && j > 0))].sort((a, b) => a - b);
-  let html = `<h2 class="bebas">Partidos</h2><p class="sub">Programa partidos y revisa alineaciones y cambios.</p>`;
-  if (fechas.length > 0) {
-    html += `<div class="card">
-      <div class="muted" style="margin-bottom:8px">Descargar la programación de una fecha</div>
-      <select id="pdf_fecha_sel">${fechas.map(j=>`<option value="${j}">Fecha ${j}</option>`).join('')}</select>
-      <button class="btn-ghost" style="width:100%;margin-top:6px" onclick="descargarProgramacionPDF()">Descargar PDF</button>
-    </div>`;
-  }
-  if (matches.length === 0) html += '<p class="muted">Aún no hay partidos programados.</p>';
+  let html = `<h2 class="bebas">Partidos</h2><p class="sub">Programación de partidos</p>`;
   for (const m of matches) {
     html += `<div class="card">
-      <div onclick="verPartido('${m.id}')" style="cursor:pointer">
-        <div style="font-weight:600">${esc(m.nombre)}</div>
-        <div class="muted">${esc(nombreDe[m.equipoA])} vs ${esc(nombreDe[m.equipoB])}${m.fecha?' · '+fmtFechaPartido(m.fecha):''}${m.hora?' · '+esc(m.hora):''}</div>
-        ${m.cancha?`<div class="muted">📍 ${esc(m.cancha)}</div>`:''}
-        ${m.observaciones?`<div class="muted" style="color:#B8860B;margin-top:4px">⚠ ${esc(m.observaciones)}</div>`:''}
-      </div>
-      <button class="btn-ghost" style="margin-top:8px" onclick="event.stopPropagation(); editarPartidoForm('${m.id}')">Editar día / hora / cancha</button>
+      <div style="font-weight:600">${esc(m.nombre)}</div>
+      <div class="muted">${esc(nombreDe[m.equipoA])} vs ${esc(nombreDe[m.equipoB])}${m.fecha?' · '+fmtFechaPartido(m.fecha):''}</div>
+      ${m.cancha?`<div class="muted">📍 ${esc(m.cancha)}</div>`:''}
     </div>`;
   }
   html += `<div class="card" id="matchForm" style="display:none">
-    <div class="muted" id="matchFormTitle" style="margin-bottom:6px">Nuevo partido</div>
-    <input type="hidden" id="m_id" value="">
-    <input id="m_jornada" type="number" min="1" placeholder="Número de fecha (1, 2, 3...)">
-    <select id="m_a"><option value="">Equipo local…</option>${teams.map(t=>`<option value="${t.id}">${esc(t.nombre)}</option>`).join('')}</select>
-    <select id="m_b"><option value="">Equipo visitante…</option>${teams.map(t=>`<option value="${t.id}">${esc(t.nombre)}</option>`).join('')}</select>
-    <select id="m_cancha"><option value="">Elige la cancha…</option>${CANCHAS.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('')}</select>
+    <div class="muted" style="margin-bottom:6px">Nuevo partido</div>
+    <input id="m_jornada" type="number" placeholder="Número de fecha">
+    <select id="m_a"><option value="">Local…</option>${teams.map(t=>`<option value="${t.id}">${esc(t.nombre)}</option>`).join('')}</select>
+    <select id="m_b"><option value="">Visitante…</option>${teams.map(t=>`<option value="${t.id}">${esc(t.nombre)}</option>`).join('')}</select>
+    <select id="m_cancha"><option value="">Cancha…</option>${CANCHAS.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('')}</select>
     <input id="m_fecha" type="date">
     <input id="m_hora" type="time">
-    <div id="m_obs_wrap" style="display:none">
-      <textarea id="m_obs" rows="3" placeholder="Observación (motivo del cambio, ej: se aplazó por lluvia)" style="width:100%;padding:12px;border-radius:8px;border:1px solid #d8ded8;font-family:inherit;font-size:16px;margin-bottom:8px"></textarea>
-    </div>
-    <button class="btn-primary" id="matchSubmitBtn" onclick="submitMatch()">Programar partido</button>
+    <button class="btn-primary" onclick="submitMatch()">Programar partido</button>
     <button class="btn-ghost" onclick="cerrarMatchForm()">Cancelar</button>
   </div>
   <button class="btn-add" id="addMatchBtn" onclick="abrirMatchForm()">+ Programar partido</button>`;
   return html;
 }
 
-function abrirMatchForm() {
-  document.getElementById('matchFormTitle').textContent = 'Nuevo partido';
-  document.getElementById('m_id').value = '';
-  document.getElementById('m_jornada').value = ''; document.getElementById('m_jornada').disabled = false;
-  document.getElementById('m_a').selectedIndex = 0; document.getElementById('m_a').disabled = false;
-  document.getElementById('m_b').selectedIndex = 0; document.getElementById('m_b').disabled = false;
-  document.getElementById('m_cancha').selectedIndex = 0;
-  document.getElementById('m_fecha').value = '';
-  document.getElementById('m_hora').value = '';
-  document.getElementById('m_obs').value = '';
-  document.getElementById('m_obs_wrap').style.display = 'none';
-  document.getElementById('matchForm').style.display = 'block';
-  document.getElementById('addMatchBtn').style.display = 'none';
-}
-
-function cerrarMatchForm() {
-  document.getElementById('matchForm').style.display = 'none';
-  document.getElementById('addMatchBtn').style.display = 'block';
-}
-
-function editarPartidoForm(matchId) {
-  const m = window.__matchesData[matchId];
-  if (!m) return;
-  document.getElementById('matchFormTitle').textContent = 'Editar partido (el número de fecha y los equipos no cambian)';
-  document.getElementById('m_id').value = m.id;
-  document.getElementById('m_jornada').value = m.jornada; document.getElementById('m_jornada').disabled = true;
-  document.getElementById('m_a').value = m.equipoA; document.getElementById('m_a').disabled = true;
-  document.getElementById('m_b').value = m.equipoB; document.getElementById('m_b').disabled = true;
-  document.getElementById('m_cancha').value = m.cancha || '';
-  document.getElementById('m_fecha').value = m.fecha || '';
-  document.getElementById('m_hora').value = m.hora || '';
-  document.getElementById('m_obs').value = '';
-  document.getElementById('m_obs_wrap').style.display = 'block';
-  document.getElementById('matchForm').style.display = 'block';
-  document.getElementById('addMatchBtn').style.display = 'none';
-  document.getElementById('matchForm').scrollIntoView({ behavior: 'smooth' });
-}
+function abrirMatchForm() { document.getElementById('matchForm').style.display = 'block'; document.getElementById('addMatchBtn').style.display = 'none'; }
+function cerrarMatchForm() { document.getElementById('matchForm').style.display = 'none'; document.getElementById('addMatchBtn').style.display = 'block'; }
 
 async function submitMatch() {
-  const btn = document.getElementById('matchSubmitBtn');
-  if (btn.disabled) return;
-  const id = document.getElementById('m_id').value;
-  const fecha = document.getElementById('m_fecha').value;
-  const hora = document.getElementById('m_hora').value;
-  const cancha = document.getElementById('m_cancha').value;
   const jornada = document.getElementById('m_jornada').value;
   const a = document.getElementById('m_a').value, b = document.getElementById('m_b').value;
-  if (!id && (!jornada || !a || !b || a===b)) return;
-  btn.disabled = true;
-  const textoOriginal = btn.textContent;
-  btn.textContent = 'Guardando…';
-  try {
-    if (id) {
-      const obs = document.getElementById('m_obs').value.trim();
-      await gsCall('editarPartido', id, fecha, hora, cancha, obs);
-    } else {
-      await gsCall('addPartido', Number(jornada), fecha, a, b, hora, cancha);
-    }
-    renderOrg();
-  } catch (e) {
-    alert(e && e.message ? e.message : 'No se pudo guardar el partido.');
-    btn.disabled = false;
-    btn.textContent = textoOriginal;
-  }
-}
-
-async function verPartido(matchId) {
-  const [matches, teams] = await Promise.all([gsCall('getPartidos'), gsCall('getEquipos')]);
-  const m = matches.find(x => x.id === matchId);
-  const teamA = teams.find(t => t.id === m.equipoA), teamB = teams.find(t => t.id === m.equipoB);
-  const content = document.getElementById('content');
-  content.innerHTML = '<p class="muted">Cargando…</p>';
-  const [playersA, playersB, goles] = await Promise.all([gsCall('getJugadores', teamA.id), gsCall('getJugadores', teamB.id), gsCall('getGoles', matchId)]);
-  const nombreJugadorDe = {}; [...playersA, ...playersB].forEach(p => nombreJugadorDe[p.id] = p.nombre);
-  const tieneResultado = m.golesA !== '' && m.golesA !== undefined && m.golesA !== null;
-  let resultadoHtml = `<div class="card" style="text-align:center">`;
-  if (tieneResultado) {
-    resultadoHtml += `<div class="row" style="justify-content:center;align-items:center;gap:16px">
-      <div style="flex:1;text-align:right;font-weight:600">${esc(teamA.nombre)}</div>
-      <div class="bebas" style="font-size:32px;color:#123626">${esc(m.golesA)} - ${esc(m.golesB)}</div>
-      <div style="flex:1;text-align:left;font-weight:600">${esc(teamB.nombre)}</div>
-    </div>`;
-  } else {
-    resultadoHtml += '<p class="muted">El árbitro aún no registra el resultado.</p>';
-  }
-  const golesTeam = (equipoId) => goles.filter(g => g.equipoId === equipoId).map(g => `${esc(nombreJugadorDe[g.jugadorId]||'—')} (${esc(g.goles)})`).join(', ');
-  if (goles.length) {
-    resultadoHtml += `<div style="margin-top:10px;text-align:left;border-top:1px solid #eef1ee;padding-top:8px">
-      <div class="muted">Goles ${esc(teamA.nombre)}</div><div style="margin-bottom:6px">${golesTeam(teamA.id)||'—'}</div>
-      <div class="muted">Goles ${esc(teamB.nombre)}</div><div>${golesTeam(teamB.id)||'—'}</div>
-    </div>`;
-  }
-  resultadoHtml += '</div>';
-  const blockHtml = async (team, players) => {
-    const [lu, cambios] = await Promise.all([
-      gsCall('getAlineacion', matchId, team.id), gsCall('getCambios', matchId, team.id)
-    ]);
-    const nombreDe = {}, numeroDe = {}; players.forEach(p => { nombreDe[p.id] = p.nombre; numeroDe[p.id] = p.numero; });
-    const listaJugadores = (ids) => ids.map(id => `<div>${esc(numeroDe[id]!=null?numeroDe[id]:'—')} · ${esc(nombreDe[id]||'—')}</div>`).join('');
-    let h = `<div class="card"><div style="font-weight:600;margin-bottom:6px">${esc(team.nombre)}</div>`;
-    if (!lu) { h += '<p class="muted">El delegado aún no confirma la alineación.</p>'; }
-    else {
-      h += `<div class="muted">Titulares (${lu.titulares.length})</div><div style="margin-bottom:8px">${listaJugadores(lu.titulares)}</div>`;
-      h += `<div class="muted">Suplentes (${lu.suplentes.length})</div><div>${listaJugadores(lu.suplentes) || '—'}</div>`;
-    }
-    if (cambios.length) {
-      h += '<div style="margin-top:10px;border-top:1px solid #eef1ee;padding-top:8px"><div class="muted">Cambios</div>';
-      cambios.sort((a,b)=>a.minuto-b.minuto).forEach(c => {
-        h += `<div style="font-size:13px">${c.minuto}' — sale ${esc(nombreDe[c.saleId]||'—')}, entra ${esc(nombreDe[c.entraId]||'—')}</div>`;
-      });
-      h += '</div>';
-    }
-    h += '</div>';
-    return h;
-  };
-  const [htmlA, htmlB] = await Promise.all([blockHtml(teamA, playersA), blockHtml(teamB, playersB)]);
-  content.innerHTML = `<button class="btn-ghost" onclick="renderOrg()">← Volver a partidos</button>
-    <h2 class="bebas" style="margin-top:12px">${esc(m.nombre)}</h2><p class="sub">${fmtFechaPartido(m.fecha)}${m.hora?' · '+esc(m.hora):''}${m.cancha?' · 📍 '+esc(m.cancha):''}</p>
-    ${m.observaciones?`<p class="muted" style="color:#B8860B">⚠ ${esc(m.observaciones)}</p>`:''}` +
-    resultadoHtml + htmlA + htmlB;
-}
-
-async function orgTarjetasHtml() {
-  const [tarjetas, teams, players, matches] = await Promise.all([gsCall('getTarjetasTodas'), gsCall('getEquipos'), gsCall('getJugadoresTodos'), gsCall('getPartidos')]);
-  const nombreEquipoDe = {}; teams.forEach(t => nombreEquipoDe[t.id] = t.nombre);
-  const nombreJugadorDe = {}; players.forEach(p => nombreJugadorDe[p.id] = '#' + esc(p.numero) + ' ' + esc(p.nombre));
-  const nombrePartidoDe = {}; matches.forEach(m => nombrePartidoDe[m.id] = m.nombre);
-  let html = `<h2 class="bebas">Amonestaciones</h2><p class="sub">Tarjetas y sanciones registradas por los árbitros. Solo se puede eliminar una tarjeta después de marcarla como pagada.</p>`;
-  const ordenadas = [...tarjetas].sort((a,b) => new Date(b.ts) - new Date(a.ts));
-  if (ordenadas.length === 0) html += '<p class="muted">Aún no hay tarjetas registradas.</p>';
-  ordenadas.forEach(t => {
-    const color = t.tipo === 'roja' ? {c:'#B3261E', bg:'#FBEAE9', label:'Roja'} : {c:'#7A4E00', bg:'#FDECC8', label:'Amarilla'};
-    const pagada = t.pagada === true || String(t.pagada).toUpperCase() === 'TRUE';
-    html += `<div class="card">
-      <div class="row" style="align-items:center">
-        <span class="badge" style="color:${color.c};background:${color.bg}">${color.label}</span>
-        <div style="flex:1">
-          <div style="font-weight:600">${nombreJugadorDe[t.jugadorId] || '—'}</div>
-          <div class="muted">${esc(nombreEquipoDe[t.equipoId]||'')} · ${esc(nombrePartidoDe[t.matchId]||'')}</div>
-        </div>
-      </div>
-      ${t.observaciones ? `<div style="margin-top:6px;font-size:14px">${esc(t.observaciones)}</div>` : ''}
-      ${t.tipo === 'roja' && t.jornadasSancion ? `<div style="margin-top:6px;font-size:13px;color:#B3261E">Suspensión: ${esc(t.jornadasSancion)} fecha${Number(t.jornadasSancion)===1?'':'s'} desde la fecha ${esc(t.jornada||'—')}</div>` : ''}
-      <div class="row" style="margin-top:10px;align-items:center;gap:8px">
-        ${pagada
-          ? `<span class="badge" style="color:#2E7D46;background:#E3F3E8">Pagada</span><button class="btn-ghost" onclick="orgEliminarTarjeta('${t.id}')">Eliminar</button>`
-          : `<span class="badge" style="color:#8a978d;background:#eef1ee">Pendiente de pago</span><button class="btn-primary" onclick="orgPagarTarjeta('${t.id}')">Marcar como pagada</button>`}
-      </div>
-    </div>`;
-  });
-  return html;
-}
-
-async function orgPagarTarjeta(id) {
-  await gsCall('marcarTarjetaPagada', id);
+  const cancha = document.getElementById('m_cancha').value;
+  const fecha = document.getElementById('m_fecha').value, hora = document.getElementById('m_hora').value;
+  if (!jornada || !a || !b || a===b) return;
+  await gsCall('addPartido', Number(jornada), fecha, a, b, hora, cancha);
+  await cargarDatosTorneoBatch(true);
   renderOrg();
 }
 
-async function orgEliminarTarjeta(id) {
-  if (!confirm('¿Eliminar esta tarjeta ya pagada? No se puede deshacer.')) return;
-  try {
-    await gsCall('eliminarTarjeta', id);
-  } catch (e) {
-    alert(e.message);
-  }
-  renderOrg();
-}
-
-function playerCardHtml(p, equipoNombre, orgView) {
-  const st = STATUS[p.estado] || STATUS.habilitado;
-  const autorizado = p.autorizado === true || String(p.autorizado).toUpperCase() === 'TRUE';
-  return `<div class="card" style="padding:12px">
-    <div class="row">
-      <div class="photo ${p.fotoUrl?'clickable':''}" ${p.fotoUrl?`onclick="verFoto('${esc(p.fotoUrl)}')"`:''}>${p.fotoUrl ? `<img src="${esc(p.fotoUrl)}">` : ''}</div>
-      <div style="flex:1;min-width:0">
-        <div style="font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(p.nombre)}</div>
-        <div class="bebas" style="font-size:20px;color:#123626;line-height:1">#${esc(p.numero)}</div>
-        <div class="muted">${esc(p.posicion)}${equipoNombre?' · '+esc(equipoNombre):''}</div>
-      </div>
-    </div>
-    <div style="margin-top:8px">
-      <span class="badge" style="color:${st.color};background:${st.bg}">${st.label}</span>
-      ${p.rh ? `<span class="badge" style="color:#B3261E;background:#FBEAE9">RH ${esc(p.rh)}</span>` : ''}
-      ${p.cuarenton ? '<span class="badge" style="color:#7A4E00;background:#FDECC8">Cuarentón</span>' : ''}
-      ${p.refuerzo ? '<span class="badge" style="color:#0B5FA5;background:#E3EEFB">Refuerzo</span>' : ''}
-      ${autorizado ? '<span class="badge" style="color:#2E7D46;background:#E3F3E8">Autorizado</span>' : '<span class="badge" style="color:#B8860B;background:#FBF3DC">Pendiente de autorización</span>'}
-    </div>
-    ${orgView && !autorizado ? `<button class="btn-primary" style="margin-top:10px;width:100%" onclick="orgAutorizarJugador('${p.id}')">Autorizar jugador</button>` : ''}
-    ${orgView && autorizado ? `<button class="btn-ghost" style="margin-top:10px;width:100%" onclick="orgRevocarAutorizacion('${p.id}')">Revocar autorización</button>` : ''}
-  </div>`;
-}
-
-// ================= DELEGADO =================
+// ================= VISTAS SECUNDARIAS (DELEGADO Y ÁRBITRO) =================
 async function renderDelegate() {
-  const tabs = [['planilla','Planilla'],['carnets','Carnets'],['partidos','Partidos'],['alineacion','Alineación'],['vivo','En vivo']];
-  app.innerHTML = '<div id="content"></div>' + tabBarHtml(tabs, STATE.tab, 'renderDelegate');
-  const content = document.getElementById('content');
-  if (STATE.tab === 'planilla') content.innerHTML = await planillaHtml();
-  if (STATE.tab === 'carnets') content.innerHTML = await delegateCarnetsHtml();
-  if (STATE.tab === 'partidos') content.innerHTML = await delegatePartidosHtml();
-  if (STATE.tab === 'alineacion') await alineacionRender(content);
-  if (STATE.tab === 'vivo') await enVivoRender(content);
+  app.innerHTML = `<div class="card"><h2 class="bebas">Panel Delegado (${esc(STATE.team.nombre)})</h2><p class="sub">Bienvenido a la gestión del equipo.</p></div>`;
 }
 
-async function delegatePartidosHtml() {
-  const [matches, teams] = await Promise.all([gsCall('getPartidos'), gsCall('getEquipos')]);
-  const misPartidos = matches.filter(m => m.equipoA === STATE.team.id || m.equipoB === STATE.team.id)
-    .sort((a, b) => (Number(a.jornada) || 0) - (Number(b.jornada) || 0));
-  const nombreEquipoDe = {}; teams.forEach(t => nombreEquipoDe[t.id] = t.nombre);
-  let html = `<h2 class="bebas">Partidos — ${esc(STATE.team.nombre)}</h2><p class="sub">Elige una fecha para ver el resultado y los detalles registrados por el árbitro.</p>`;
-  if (misPartidos.length === 0) html += '<p class="muted">Aún no tienes partidos programados.</p>';
-  misPartidos.forEach(m => {
-    const rival = m.equipoA === STATE.team.id ? nombreEquipoDe[m.equipoB] : nombreEquipoDe[m.equipoA];
-    const tieneResultado = m.golesA !== '' && m.golesA !== undefined && m.golesA !== null;
-    let marcador = '';
-    if (tieneResultado) {
-      const misGoles = m.equipoA === STATE.team.id ? m.golesA : m.golesB;
-      const golesRival = m.equipoA === STATE.team.id ? m.golesB : m.golesA;
-      marcador = `${esc(misGoles)} - ${esc(golesRival)}`;
-    }
-    html += `<div class="card row" style="cursor:pointer;align-items:center" onclick="verPartidoDelegado('${m.id}')">
-      <div style="flex:1">
-        <div style="font-weight:600">${esc(m.nombre)}</div>
-        <div class="muted">vs ${esc(rival||'—')}${m.fecha?' · '+fmtFechaPartido(m.fecha):''}${m.hora?' · '+esc(m.hora):''}</div>
-        ${m.cancha?`<div class="muted">📍 ${esc(m.cancha)}</div>`:''}
-        ${m.observaciones?`<div class="muted" style="color:#B8860B">⚠ ${esc(m.observaciones)}</div>`:''}
-      </div>
-      ${tieneResultado ? `<div class="bebas" style="font-size:20px;color:#123626">${marcador}</div>` : '<span class="badge" style="color:#8a978d;background:#eef1ee">Sin jugar</span>'}
-    </div>`;
-  });
-  return html;
-}
-
-async function verPartidoDelegado(matchId) {
-  const content = document.getElementById('content');
-  content.innerHTML = '<p class="muted">Cargando…</p>';
-  const [matches, teams] = await Promise.all([gsCall('getPartidos'), gsCall('getEquipos')]);
-  const m = matches.find(x => x.id === matchId);
-  const teamA = teams.find(t => t.id === m.equipoA), teamB = teams.find(t => t.id === m.equipoB);
-  const [playersA, playersB, goles] = await Promise.all([gsCall('getJugadores', teamA.id), gsCall('getJugadores', teamB.id), gsCall('getGoles', matchId)]);
-  const nombreJugadorDe = {}; [...playersA, ...playersB].forEach(p => nombreJugadorDe[p.id] = p.nombre);
-  const tieneResultado = m.golesA !== '' && m.golesA !== undefined && m.golesA !== null;
-  let resultadoHtml = `<div class="card" style="text-align:center">`;
-  if (tieneResultado) {
-    resultadoHtml += `<div class="row" style="justify-content:center;align-items:center;gap:16px">
-      <div style="flex:1;text-align:right;font-weight:600">${esc(teamA.nombre)}</div>
-      <div class="bebas" style="font-size:32px;color:#123626">${esc(m.golesA)} - ${esc(m.golesB)}</div>
-      <div style="flex:1;text-align:left;font-weight:600">${esc(teamB.nombre)}</div>
-    </div>`;
-  } else {
-    resultadoHtml += '<p class="muted">El árbitro aún no registra el resultado de este partido.</p>';
-  }
-  const golesTeam = (equipoId) => goles.filter(g => g.equipoId === equipoId).map(g => `${esc(nombreJugadorDe[g.jugadorId]||'—')} (${esc(g.goles)})`).join(', ');
-  if (goles.length) {
-    resultadoHtml += `<div style="margin-top:10px;text-align:left;border-top:1px solid #eef1ee;padding-top:8px">
-      <div class="muted">Goles ${esc(teamA.nombre)}</div><div style="margin-bottom:6px">${golesTeam(teamA.id)||'—'}</div>
-      <div class="muted">Goles ${esc(teamB.nombre)}</div><div>${golesTeam(teamB.id)||'—'}</div>
-    </div>`;
-  }
-  resultadoHtml += '</div>';
-  const blockHtml = async (team, players) => {
-    const [lu, cambios] = await Promise.all([
-      gsCall('getAlineacion', matchId, team.id), gsCall('getCambios', matchId, team.id)
-    ]);
-    const nombreDe = {}, numeroDe = {}; players.forEach(p => { nombreDe[p.id] = p.nombre; numeroDe[p.id] = p.numero; });
-    const listaJugadores = (ids) => ids.map(id => `<div>${esc(numeroDe[id]!=null?numeroDe[id]:'—')} · ${esc(nombreDe[id]||'—')}</div>`).join('');
-    let h = `<div class="card"><div style="font-weight:600;margin-bottom:6px">${esc(team.nombre)}</div>`;
-    if (!lu) { h += '<p class="muted">Alineación no confirmada.</p>'; }
-    else {
-      h += `<div class="muted">Titulares (${lu.titulares.length})</div><div style="margin-bottom:8px">${listaJugadores(lu.titulares)}</div>`;
-      h += `<div class="muted">Suplentes (${lu.suplentes.length})</div><div>${listaJugadores(lu.suplentes) || '—'}</div>`;
-    }
-    if (cambios.length) {
-      h += '<div style="margin-top:10px;border-top:1px solid #eef1ee;padding-top:8px"><div class="muted">Cambios</div>';
-      cambios.sort((a,b)=>a.minuto-b.minuto).forEach(c => {
-        h += `<div style="font-size:13px">${c.minuto}' — sale ${esc(nombreDe[c.saleId]||'—')}, entra ${esc(nombreDe[c.entraId]||'—')}</div>`;
-      });
-      h += '</div>';
-    }
-    h += '</div>';
-    return h;
-  };
-  const [htmlA, htmlB] = await Promise.all([blockHtml(teamA, playersA), blockHtml(teamB, playersB)]);
-  content.innerHTML = `<button class="btn-ghost" onclick="renderDelegate()">← Volver a partidos</button>
-    <h2 class="bebas" style="margin-top:12px">${esc(m.nombre)}</h2><p class="sub">${fmtFechaPartido(m.fecha)}${m.hora?' · '+esc(m.hora):''}${m.cancha?' · 📍 '+esc(m.cancha):''}</p>
-    ${m.observaciones?`<p class="muted" style="color:#B8860B">⚠ ${esc(m.observaciones)}</p>`:''}` +
-    resultadoHtml + htmlA + htmlB;
-}
-
-async function planillaHtml() {
-  const players = await gsCall('getJugadores', STATE.team.id);
-  let html = `<h2 class="bebas">Planilla — ${esc(STATE.team.nombre)}</h2><p class="sub">${players.length} jugador${players.length===1?'':'es'} · Delegado: ${esc(STATE.team.delegado)||'—'} · DT: ${esc(STATE.team.dt)||'—'}</p>`;
-  players.forEach(p => {
-    const autorizado = p.autorizado === true || String(p.autorizado).toUpperCase() === 'TRUE';
-    html += `<div class="card row">
-      <div class="photo ${p.fotoUrl?'clickable':''}" style="width:64px;height:64px" ${p.fotoUrl?`onclick="verFoto('${esc(p.fotoUrl)}')"`:''}>${p.fotoUrl?`<img src="${esc(p.fotoUrl)}">`:''}</div>
-      <div style="flex:1" onclick="editPlayer('${p.id}')">
-        <div style="font-weight:600;font-size:14px">#${esc(p.numero)} ${esc(p.nombre)}${p.cuarenton?' · Cuarentón':''}${p.refuerzo?' · Refuerzo':''}</div>
-        <div class="muted">${esc(p.posicion)} · ${STATUS[p.estado]?.label||''}</div>
-        <div style="margin-top:4px">${autorizado ? '<span class="badge" style="color:#2E7D46;background:#E3F3E8">Autorizado</span>' : '<span class="badge" style="color:#B8860B;background:#FBF3DC">Pendiente de autorización</span>'}</div>
-      </div>
-      <button class="btn-ghost" onclick="editPlayer('${p.id}')">Editar</button>
-      <button class="btn-ghost" style="color:#B3261E" onclick="removePlayer('${p.id}')">Eliminar</button>
-    </div>`;
-  });
-  html += `<button class="btn-add" id="addPlayerBtn" onclick="showPlayerForm()">+ Agregar jugador</button>
-  <div class="card" id="playerForm" style="display:none">
-    <div class="row" style="margin-bottom:10px; flex-wrap:wrap; gap:8px">
-      <div class="photo" id="photoPreview" style="width:64px;height:64px"></div>
-      <label class="btn-ghost">Tomar foto<input type="file" accept="image/*" capture="environment" style="display:none" onchange="onPhotoChosen(this.files[0])"></label>
-      <label class="btn-ghost">Subir archivo<input type="file" accept="image/*" style="display:none" onchange="onPhotoChosen(this.files[0])"></label>
-    </div>
-    <input id="p_nombre" placeholder="Nombre completo">
-    <input id="p_doc" placeholder="Número de identificación (cédula)">
-    <input id="p_nac" type="date">
-    <select id="p_rh"><option value="">RH / tipo de sangre…</option>${RH_TYPES.map(x=>`<option value="${x}">${x}</option>`).join('')}</select>
-    <input id="p_num" type="number" placeholder="Número de camiseta">
-    <select id="p_pos">${POSITIONS.map(x=>`<option>${x}</option>`).join('')}</select>
-    <select id="p_estado">${Object.entries(STATUS).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join('')}</select>
-    <label class="chk"><input type="checkbox" id="p_cuarenton"> Jugador cuarentón (mayor de 40)</label>
-    <label class="chk"><input type="checkbox" id="p_refuerzo"> Jugador de refuerzo</label>
-    <div id="p_error" style="color:#B3261E;font-size:13px;margin-bottom:8px"></div>
-    <button class="btn-primary" onclick="savePlayer()">Guardar</button>
-    <button class="btn-ghost" onclick="document.getElementById('playerForm').style.display='none'; document.getElementById('addPlayerBtn').style.display='block';">Cancelar</button>
-  </div>`;
-  return html;
-}
-
-let editingId = null, currentPhoto = null;
-function showPlayerForm() {
-  editingId = null; currentPhoto = null;
-  ['p_nombre','p_doc','p_num'].forEach(id => document.getElementById(id).value='');
-  document.getElementById('p_nac').value=''; document.getElementById('p_rh').value=''; document.getElementById('p_pos').selectedIndex=0;
-  document.getElementById('p_estado').value='habilitado'; document.getElementById('p_cuarenton').checked=false; document.getElementById('p_refuerzo').checked=false;
-  document.getElementById('photoPreview').innerHTML=''; document.getElementById('p_error').innerText='';
-  document.getElementById('playerForm').style.display='block';
-  document.getElementById('addPlayerBtn').style.display='none';
-}
-async function editPlayer(id) {
-  const players = await gsCall('getJugadores', STATE.team.id);
-  const p = players.find(x => x.id === id);
-  editingId = id; currentPhoto = null;
-  document.getElementById('p_nombre').value = p.nombre;
-  document.getElementById('p_doc').value = p.docId;
-  document.getElementById('p_nac').value = p.nacimiento;
-  document.getElementById('p_rh').value = p.rh || '';
-  document.getElementById('p_num').value = p.numero;
-  document.getElementById('p_pos').value = p.posicion;
-  document.getElementById('p_estado').value = p.estado;
-  document.getElementById('p_cuarenton').checked = !!p.cuarenton;
-  document.getElementById('p_refuerzo').checked = !!p.refuerzo;
-  document.getElementById('photoPreview').innerHTML = p.fotoUrl ? `<img src="${esc(p.fotoUrl)}">` : '';
-  document.getElementById('p_error').innerText = '';
-  document.getElementById('playerForm').style.display = 'block';
-  document.getElementById('addPlayerBtn').style.display = 'none';
-}
-async function onPhotoChosen(file) {
-  if (!file) return;
-  currentPhoto = await resizeImage(file);
-  document.getElementById('photoPreview').innerHTML = `<img src="${currentPhoto}">`;
-}
-async function savePlayer() {
-  const nombre = document.getElementById('p_nombre').value.trim();
-  const numero = document.getElementById('p_num').value;
-  if (!nombre || !numero) { document.getElementById('p_error').innerText = 'Nombre y número de camiseta son obligatorios.'; return; }
-  const esNuevo = !editingId;
-  const jugador = {
-    id: editingId, nombre, docId: document.getElementById('p_doc').value.trim(),
-    nacimiento: document.getElementById('p_nac').value, numero,
-    rh: document.getElementById('p_rh').value,
-    posicion: document.getElementById('p_pos').value, estado: document.getElementById('p_estado').value,
-    cuarenton: document.getElementById('p_cuarenton').checked,
-    refuerzo: document.getElementById('p_refuerzo').checked
-  };
-  try {
-    await gsCall('guardarJugador', STATE.team.id, jugador, currentPhoto, STATE.team.nombre);
-    renderDelegate();
-    if (esNuevo) alert('Jugador guardado. Queda "Pendiente de autorización" hasta que el organizador lo autorice — solo entonces podrás alinearlo en un partido.');
-  } catch (e) {
-    document.getElementById('p_error').innerText = (e && e.message) ? e.message : 'No se pudo guardar.';
-  }
-}
-async function removePlayer(id) {
-  await gsCall('eliminarJugador', id);
-  renderDelegate();
-}
-
-async function delegateCarnetsHtml() {
-  const players = await gsCall('getJugadores', STATE.team.id);
-  let html = `<h2 class="bebas">Carnets — ${esc(STATE.team.nombre)}</h2><p class="sub">${players.length} jugador(es) en la plantilla</p>`;
-  html += '<div class="stack">' + players.map(p => playerCardHtml(p)).join('') + '</div>';
-  return html;
-}
-
-async function alineacionRender(content) {
-  const [allMatches, teams] = await Promise.all([gsCall('getPartidos'), gsCall('getEquipos')]);
-  const matches = allMatches.filter(m => m.equipoA === STATE.team.id || m.equipoB === STATE.team.id);
-  const players = await gsCall('getJugadores', STATE.team.id);
-  const nombreEquipoDe = {}; teams.forEach(t => nombreEquipoDe[t.id] = t.nombre);
-  const rivalDe = (m) => m.equipoA === STATE.team.id ? nombreEquipoDe[m.equipoB] : nombreEquipoDe[m.equipoA];
-  content.innerHTML = `<h2 class="bebas">Alineación — ${esc(STATE.team.nombre)}</h2><p class="sub">Elige titulares y suplentes de tu plantilla</p>
-    <select id="al_match" onchange="alineacionCargar()"><option value="">Elige un partido…</option>${matches.map(m=>`<option value="${m.id}">${esc(m.nombre)} · vs ${esc(rivalDe(m)||'—')}${m.fecha?' · '+fmtFechaPartido(m.fecha):''}${m.hora?' '+esc(m.hora):''}${m.cancha?' · '+esc(m.cancha):''}</option>`).join('')}</select>
-    <div id="al_body"></div>`;
-  window.__alPlayers = players;
-  window.__alMatches = matches;
-}
-let alTitulares = [], alSuplentes = [];
-async function alineacionCargar() {
-  const matchId = document.getElementById('al_match').value;
-  const body = document.getElementById('al_body');
-  if (!matchId) { body.innerHTML = ''; return; }
-  const lu = await gsCall('getAlineacion', matchId, STATE.team.id);
-  alTitulares = lu ? lu.titulares : [];
-  alSuplentes = lu ? lu.suplentes : [];
-  window.__alTarjetas = await gsCall('getTarjetasTodas');
-  const match = (window.__alMatches || []).find(m => m.id === matchId);
-  window.__alJornadaActual = (match && match.jornada !== '' && match.jornada != null) ? Number(match.jornada) : null;
-  alineacionRedibujar(matchId, !!lu);
-}
-
-// Revisa si un jugador puede alinearse: sin tarjetas pendientes de pago, y sin suspensión activa por roja
-function estadoTarjetaJugador(jugadorId) {
-  const jornadaActual = window.__alJornadaActual;
-  const tarjetas = (window.__alTarjetas || []).filter(t => t.jugadorId === jugadorId);
-  for (const t of tarjetas) {
-    const pagada = t.pagada === true || String(t.pagada).toUpperCase() === 'TRUE';
-    if (!pagada) {
-      return { bloqueado: true, motivo: `Tarjeta ${t.tipo} pendiente de pago` };
-    }
-    if (t.tipo === 'roja' && jornadaActual != null && t.jornada !== '' && t.jornada != null) {
-      const cardJornada = Number(t.jornada);
-      const sancion = Number(t.jornadasSancion) || 0;
-      const bloqueadoHasta = cardJornada + sancion - 1;
-      if (sancion > 0 && jornadaActual > cardJornada && jornadaActual <= bloqueadoHasta) {
-        return { bloqueado: true, motivo: `Suspendido por roja hasta que pase la fecha ${bloqueadoHasta}` };
-      }
-    }
-  }
-  return { bloqueado: false, motivo: '' };
-}
-
-function alineacionRedibujar(matchId, confirmed) {
-  const body = document.getElementById('al_body');
-  const players = window.__alPlayers;
-  window.__alHabilitados = {};
-  let html = `<div class="muted" style="margin:10px 0">Titulares: ${alTitulares.length}/11 · Suplentes: ${alSuplentes.length}</div>`;
-  if (players.length === 0) html += '<p class="muted">Agrega jugadores en Planilla primero.</p>';
-  players.forEach(p => {
-    const isT = alTitulares.includes(p.id), isS = alSuplentes.includes(p.id);
-    const autorizado = p.autorizado === true || String(p.autorizado).toUpperCase() === 'TRUE';
-    const est = estadoTarjetaJugador(p.id);
-    const habilitado = autorizado && !est.bloqueado;
-    window.__alHabilitados[p.id] = habilitado;
-    let motivo = '';
-    if (!autorizado) motivo = 'Pendiente de autorización del organizador';
-    else if (est.bloqueado) motivo = est.motivo;
-    html += `<div class="card row" style="padding:10px">
-      <div style="flex:1;font-size:14px">#${esc(p.numero)} ${esc(p.nombre)} <span class="muted">· ${esc(p.posicion)}</span>${motivo?`<div class="muted" style="color:#B8860B">${esc(motivo)}</div>`:''}</div>
-      <button class="toggle ${isT?'on-t':''}" ${habilitado?'':'disabled'} onclick="alToggle('t','${p.id}','${matchId}',${confirmed})">Titular</button>
-      <button class="toggle ${isS?'on-s':''}" ${habilitado?'':'disabled'} onclick="alToggle('s','${p.id}','${matchId}',${confirmed})">Suplente</button>
-    </div>`;
-  });
-  html += `<button class="btn-primary" style="margin-top:8px" onclick="alConfirmar('${matchId}')">${confirmed?'Actualizar alineación confirmada':'Confirmar alineación'}</button>`;
-  if (confirmed) html += '<p style="color:#3F7D58;font-size:12px;margin-top:6px">✓ El organizador fue notificado.</p>';
-  body.innerHTML = html;
-}
-function alToggle(kind, id, matchId, confirmed) {
-  const habilitado = (window.__alHabilitados || {})[id];
-  if (!habilitado) return;
-  if (kind === 't') {
-    if (alTitulares.includes(id)) alTitulares = alTitulares.filter(x=>x!==id);
-    else if (!alSuplentes.includes(id) && alTitulares.length < 11) alTitulares.push(id);
-  } else {
-    if (alSuplentes.includes(id)) alSuplentes = alSuplentes.filter(x=>x!==id);
-    else if (!alTitulares.includes(id)) alSuplentes.push(id);
-  }
-  alineacionRedibujar(matchId, confirmed);
-}
-async function alConfirmar(matchId) {
-  const matches = await gsCall('getPartidos');
-  const m = matches.find(x => x.id === matchId);
-  await gsCall('guardarAlineacion', matchId, STATE.team.id, alTitulares, alSuplentes, STATE.team.nombre, m.nombre);
-  alineacionRedibujar(matchId, true);
-}
-
-async function enVivoRender(content) {
-  const [allMatches, teams] = await Promise.all([gsCall('getPartidos'), gsCall('getEquipos')]);
-  const matches = allMatches.filter(m => m.equipoA === STATE.team.id || m.equipoB === STATE.team.id);
-  const nombreEquipoDe = {}; teams.forEach(t => nombreEquipoDe[t.id] = t.nombre);
-  const rivalDe = (m) => m.equipoA === STATE.team.id ? nombreEquipoDe[m.equipoB] : nombreEquipoDe[m.equipoA];
-  content.innerHTML = `<h2 class="bebas">Partido en vivo — ${esc(STATE.team.nombre)}</h2><p class="sub">Registra los cambios a medida que ocurren</p>
-    <select id="ev_match" onchange="enVivoCargar()"><option value="">Elige un partido…</option>${matches.map(m=>`<option value="${m.id}">${esc(m.nombre)} · vs ${esc(rivalDe(m)||'—')}${m.fecha?' · '+fmtFechaPartido(m.fecha):''}${m.hora?' '+esc(m.hora):''}${m.cancha?' · '+esc(m.cancha):''}</option>`).join('')}</select>
-    <div id="ev_body"></div>`;
-}
-async function enVivoCargar() {
-  const matchId = document.getElementById('ev_match').value;
-  const body = document.getElementById('ev_body');
-  if (!matchId) { body.innerHTML=''; return; }
-  const lu = await gsCall('getAlineacion', matchId, STATE.team.id);
-  if (!lu) { body.innerHTML = '<p class="muted">Primero confirma la alineación titular en la pestaña Alineación.</p>'; return; }
-  const players = await gsCall('getJugadores', STATE.team.id);
-  const log = await gsCall('getCambios', matchId, STATE.team.id);
-  const nombreDe = {}, cuarentonDe = {};
-  players.forEach(p=>{ nombreDe[p.id]=p.nombre; cuarentonDe[p.id]=!!p.cuarenton; });
-
-  // Reproducimos los cambios en orden cronológico para saber quién está en cancha en este momento
-  const eventos = [...log].sort((a,b)=> (a.minuto-b.minuto) || (new Date(a.ts)-new Date(b.ts)));
-  const enCancha = new Set(lu.titulares);
-  const yaEntroAlgunaVez = new Set(); // suplentes que ya usaron su entrada (para bloquear reingreso, salvo cuarentón)
-  eventos.forEach(c => {
-    enCancha.delete(c.saleId);
-    enCancha.add(c.entraId);
-    if (lu.suplentes.includes(c.entraId)) yaEntroAlgunaVez.add(c.entraId);
-  });
-
-  // Sale: cualquiera que esté actualmente en cancha (titular o suplente que entró)
-  const disponibles = [...enCancha];
-
-  // Entra: suplentes que no están en cancha y (nunca han entrado, o son cuarentón y pueden reingresar)
-  const banca = lu.suplentes.filter(id => !enCancha.has(id) && (cuarentonDe[id] || !yaEntroAlgunaVez.has(id)));
-  // Además, un titular cuarentón que ya salió también puede volver a entrar (los titulares normales no)
-  const titularesReingresan = lu.titulares.filter(id => !enCancha.has(id) && cuarentonDe[id]);
-  const puedenEntrar = [...banca, ...titularesReingresan];
-  let html = `<div class="card">
-    <div class="muted" style="margin-bottom:8px">Registrar cambio</div>
-    <select id="ev_out"><option value="">Sale…</option>${disponibles.map(id=>`<option value="${id}">${esc(nombreDe[id]||'—')}</option>`).join('')}</select>
-    <select id="ev_in"><option value="">Entra…</option>${puedenEntrar.map(id=>`<option value="${id}">${esc(nombreDe[id]||'—')}${cuarentonDe[id]?' (cuarentón)':''}</option>`).join('')}</select>
-    <input id="ev_min" type="number" placeholder="Minuto">
-    <button class="btn-primary" onclick="enVivoRegistrar('${matchId}')">Registrar cambio</button>
-  </div>
-  <div class="muted" style="margin:10px 0 6px">Historial del partido</div>`;
-  if (log.length === 0) html += '<p class="muted">Sin cambios registrados aún.</p>';
-  log.sort((a,b)=>a.minuto-b.minuto).forEach(c => {
-    html += `<div class="card">${c.minuto}' — sale ${esc(nombreDe[c.saleId]||'—')}, entra ${esc(nombreDe[c.entraId]||'—')}</div>`;
-  });
-  body.innerHTML = html;
-}
-async function enVivoRegistrar(matchId) {
-  const outId = document.getElementById('ev_out').value, inId = document.getElementById('ev_in').value, minuto = document.getElementById('ev_min').value;
-  if (!outId || !inId || !minuto) return;
-  const players = await gsCall('getJugadores', STATE.team.id);
-  const nombreDe = {}; players.forEach(p=>nombreDe[p.id]=p.nombre);
-  const matches = await gsCall('getPartidos');
-  const m = matches.find(x=>x.id===matchId);
-  await gsCall('addCambio', matchId, STATE.team.id, outId, inId, Number(minuto), STATE.team.nombre, m.nombre, nombreDe[outId], nombreDe[inId]);
-  enVivoCargar();
-}
-
-// ================= ÁRBITRO =================
 async function renderArbitro() {
-  app.innerHTML = '<div id="content"></div>';
-  const content = document.getElementById('content');
-  content.innerHTML = await arbitroHtml();
+  app.innerHTML = `<div class="card"><h2 class="bebas">Panel Árbitro</h2><p class="sub">Planillaje y gestión en cancha.</p></div>`;
 }
 
-async function arbitroHtml() {
-  const [matches, teams] = await Promise.all([gsCall('getPartidos'), gsCall('getEquipos')]);
-  const nombreEquipoDe = {}; teams.forEach(t => nombreEquipoDe[t.id] = t.nombre);
-  let html = `<h2 class="bebas">Panel del árbitro</h2><p class="sub">Elige el partido para registrar el resultado, los goles y las tarjetas.</p>
-    <select id="ar_match" onchange="arbitroCargarPartido()"><option value="">Elige un partido…</option>${matches.map(m=>`<option value="${m.id}">${esc(m.nombre)} · ${esc(nombreEquipoDe[m.equipoA]||'—')} vs ${esc(nombreEquipoDe[m.equipoB]||'—')}${m.fecha?' · '+fmtFechaPartido(m.fecha):''}${m.hora?' '+esc(m.hora):''}${m.cancha?' · '+esc(m.cancha):''}</option>`).join('')}</select>
-    <div id="ar_body"></div>`;
-  return html;
-}
-
-async function arbitroCargarPartido() {
-  const matchId = document.getElementById('ar_match').value;
-  const body = document.getElementById('ar_body');
-  if (!matchId) { body.innerHTML = ''; return; }
-  body.innerHTML = '<p class="muted">Cargando…</p>';
-  const [matches, teams] = await Promise.all([gsCall('getPartidos'), gsCall('getEquipos')]);
-  const m = matches.find(x => x.id === matchId);
-  const teamA = teams.find(t => t.id === m.equipoA), teamB = teams.find(t => t.id === m.equipoB);
-  window.__arMatch = m; window.__arTeams = { a: teamA, b: teamB };
-  await arbitroRedibujar();
-}
-
-async function arbitroRedibujar() {
-  const m = window.__arMatch, teamA = window.__arTeams.a, teamB = window.__arTeams.b;
-  const body = document.getElementById('ar_body');
-  const [tarjetas, playersA, playersB, goles] = await Promise.all([gsCall('getTarjetas', m.id), gsCall('getJugadores', teamA.id), gsCall('getJugadores', teamB.id), gsCall('getGoles', m.id)]);
-  const nombreEquipoDe = {}; [teamA, teamB].forEach(t => nombreEquipoDe[t.id] = t.nombre);
-  const nombreJugadorDe = {}; [...playersA, ...playersB].forEach(p => nombreJugadorDe[p.id] = '#' + esc(p.numero) + ' ' + esc(p.nombre));
-  const golDe = {}; goles.forEach(g => golDe[g.jugadorId] = g.goles);
-  const tieneResultado = m.golesA !== '' && m.golesA !== undefined && m.golesA !== null;
-
-  let html = `<p class="muted" style="margin-top:-4px">${esc(m.nombre)}${m.fecha?' · '+fmtFechaPartido(m.fecha):''}${m.hora?' '+esc(m.hora):''}</p>
-  <div class="card">
-    <div class="muted" style="margin-bottom:8px">Resultado del partido</div>
-    <div class="row" style="align-items:center;gap:10px">
-      <div style="flex:1;font-size:13px;font-weight:600">${esc(teamA.nombre)}</div>
-      <input type="number" min="0" id="ar_golesA" value="${tieneResultado?esc(m.golesA):''}" style="width:70px;text-align:center;margin:0">
-      <div class="bebas" style="font-size:20px">-</div>
-      <input type="number" min="0" id="ar_golesB" value="${tieneResultado?esc(m.golesB):''}" style="width:70px;text-align:center;margin:0">
-      <div style="flex:1;font-size:13px;font-weight:600;text-align:right">${esc(teamB.nombre)}</div>
-    </div>
-    <button class="btn-primary" style="margin-top:10px;width:100%" onclick="arbitroGuardarResultado()">Guardar resultado</button>
-  </div>
-
-  <div class="card">
-    <div class="muted" style="margin-bottom:8px">Goles por jugador</div>
-    <div style="font-weight:600;font-size:13px;margin-bottom:4px">${esc(teamA.nombre)}</div>
-    ${playersA.map(p => `<div class="row" style="align-items:center;margin-bottom:6px">
-      <div style="flex:1;font-size:14px">#${esc(p.numero)} ${esc(p.nombre)}</div>
-      <input type="number" min="0" id="gol_${p.id}" value="${golDe[p.id]||''}" placeholder="0" style="width:60px;text-align:center;margin:0">
-    </div>`).join('')}
-    <div style="font-weight:600;font-size:13px;margin:10px 0 4px">${esc(teamB.nombre)}</div>
-    ${playersB.map(p => `<div class="row" style="align-items:center;margin-bottom:6px">
-      <div style="flex:1;font-size:14px">#${esc(p.numero)} ${esc(p.nombre)}</div>
-      <input type="number" min="0" id="gol_${p.id}" value="${golDe[p.id]||''}" placeholder="0" style="width:60px;text-align:center;margin:0">
-    </div>`).join('')}
-    <button class="btn-primary" style="margin-top:6px;width:100%" onclick="arbitroGuardarGoles()">Guardar goles</button>
-  </div>
-
-  <div class="card">
-    <div class="muted" style="margin-bottom:8px">Registrar amonestación</div>
-    <select id="ar_equipo" onchange="arbitroCargarJugadores()">
-      <option value="">Elige el equipo…</option>
-      <option value="${teamA.id}">${esc(teamA.nombre)}</option>
-      <option value="${teamB.id}">${esc(teamB.nombre)}</option>
-    </select>
-    <div class="muted" style="margin:4px 0 6px">Jugador</div>
-    <input type="hidden" id="ar_jugador" value="">
-    <div id="ar_jugador_lista" class="muted" style="margin-bottom:10px">Elige primero el equipo…</div>
-    <select id="ar_tipo" onchange="arbitroToggleSancion()">
-      <option value="amarilla">Tarjeta amarilla</option>
-      <option value="roja">Tarjeta roja</option>
-    </select>
-    <div id="ar_sancion_wrap" style="display:none">
-      <input type="number" min="1" id="ar_sancion" placeholder="¿Cuántas fechas de suspensión?">
-    </div>
-    <textarea id="ar_obs" rows="3" placeholder="Observaciones (motivo, detalle de la sanción, etc.)" style="width:100%;padding:12px;border-radius:8px;border:1px solid #d8ded8;font-family:inherit;font-size:16px;margin-bottom:8px"></textarea>
-    <button class="btn-primary" onclick="arbitroRegistrar()">Registrar tarjeta</button>
-  </div>
-  <div class="muted" style="margin:14px 0 6px">Tarjetas de este partido</div>`;
-  if (tarjetas.length === 0) html += '<p class="muted">Aún no hay tarjetas registradas en este partido.</p>';
-  tarjetas.slice().reverse().forEach(t => { html += tarjetaCardHtml(t, nombreEquipoDe, nombreJugadorDe); });
-  body.innerHTML = html;
-}
-
-function arbitroToggleSancion() {
-  const tipo = document.getElementById('ar_tipo').value;
-  document.getElementById('ar_sancion_wrap').style.display = tipo === 'roja' ? 'block' : 'none';
-}
-
-async function arbitroGuardarResultado() {
-  const m = window.__arMatch;
-  const golesA = document.getElementById('ar_golesA').value;
-  const golesB = document.getElementById('ar_golesB').value;
-  if (golesA === '' || golesB === '') { alert('Completa el marcador de ambos equipos.'); return; }
-  await gsCall('guardarResultado', m.id, Number(golesA), Number(golesB));
-  alert('Resultado guardado.');
-}
-
-async function arbitroGuardarGoles() {
-  const teamA = window.__arTeams.a, teamB = window.__arTeams.b, m = window.__arMatch;
-  const [playersA, playersB] = await Promise.all([gsCall('getJugadores', teamA.id), gsCall('getJugadores', teamB.id)]);
-  for (const p of playersA) {
-    const v = document.getElementById('gol_' + p.id).value;
-    await gsCall('guardarGolJugador', m.id, p.id, teamA.id, Number(v) || 0);
-  }
-  for (const p of playersB) {
-    const v = document.getElementById('gol_' + p.id).value;
-    await gsCall('guardarGolJugador', m.id, p.id, teamB.id, Number(v) || 0);
-  }
-  alert('Goles guardados.');
-  await arbitroRedibujar();
-}
-
-async function arbitroCargarJugadores() {
-  const equipoId = document.getElementById('ar_equipo').value;
-  const lista = document.getElementById('ar_jugador_lista');
-  document.getElementById('ar_jugador').value = '';
-  if (!equipoId) { lista.className = 'muted'; lista.innerHTML = 'Elige primero el equipo…'; return; }
-  const players = await gsCall('getJugadores', equipoId);
-  lista.className = 'stack';
-  if (players.length === 0) { lista.className = 'muted'; lista.innerHTML = 'Este equipo no tiene jugadores registrados.'; return; }
-  lista.innerHTML = players.map(p => `<div class="card row" id="arp_${p.id}" style="cursor:pointer;align-items:center;padding:8px" onclick="arbitroSeleccionarJugador('${p.id}')">
-    <div class="photo" style="width:44px;height:44px">${p.fotoUrl ? `<img src="${esc(p.fotoUrl)}">` : ''}</div>
-    <div style="flex:1">
-      <div style="font-weight:600;font-size:14px">${esc(p.nombre)}</div>
-      <div class="muted">#${esc(p.numero)} · ${esc(p.posicion)}</div>
-    </div>
-  </div>`).join('');
-}
-
-function arbitroSeleccionarJugador(id) {
-  document.getElementById('ar_jugador').value = id;
-  document.querySelectorAll('#ar_jugador_lista .card').forEach(el => {
-    el.style.border = el.id === 'arp_' + id ? '2px solid #123626' : '1px solid transparent';
-  });
-}
-
-async function arbitroRegistrar() {
-  const m = window.__arMatch, teams = window.__arTeams;
-  const equipoId = document.getElementById('ar_equipo').value;
-  const jugadorId = document.getElementById('ar_jugador').value;
-  const tipo = document.getElementById('ar_tipo').value;
-  const obs = document.getElementById('ar_obs').value.trim();
-  const sancion = document.getElementById('ar_sancion').value;
-  if (!equipoId || !jugadorId) return;
-  if (tipo === 'roja' && !sancion) { alert('Indica cuántas fechas de suspensión lleva la tarjeta roja.'); return; }
-  const team = (teams.a.id === equipoId) ? teams.a : teams.b;
-  const players = await gsCall('getJugadores', equipoId);
-  const jugador = players.find(p => p.id === jugadorId);
-  await gsCall('addTarjeta', m.id, equipoId, jugadorId, tipo, obs, team.nombre, jugador ? jugador.nombre : '', m.nombre, m.jornada, sancion ? Number(sancion) : 0);
-  await arbitroRedibujar();
-}
-
-function tarjetaCardHtml(t, nombreEquipoDe, nombreJugadorDe) {
-  const color = t.tipo === 'roja' ? {c:'#B3261E', bg:'#FBEAE9', label:'Roja'} : {c:'#7A4E00', bg:'#FDECC8', label:'Amarilla'};
-  const pagada = t.pagada === true || String(t.pagada).toUpperCase() === 'TRUE';
-  return `<div class="card">
-    <div class="row" style="align-items:center">
-      <span class="badge" style="color:${color.c};background:${color.bg}">${color.label}</span>
-      <div style="flex:1">
-        <div style="font-weight:600">${nombreJugadorDe[t.jugadorId] || '—'}</div>
-        <div class="muted">${esc(nombreEquipoDe[t.equipoId]||'')}</div>
-      </div>
-    </div>
-    ${t.observaciones ? `<div style="margin-top:6px;font-size:14px">${esc(t.observaciones)}</div>` : ''}
-    ${t.tipo === 'roja' && t.jornadasSancion ? `<div style="margin-top:6px;font-size:13px;color:#B3261E">Suspensión: ${esc(t.jornadasSancion)} fecha${Number(t.jornadasSancion)===1?'':'s'} desde la fecha ${esc(t.jornada||'—')}</div>` : ''}
-    <div style="margin-top:8px">${pagada
-      ? '<span class="badge" style="color:#2E7D46;background:#E3F3E8">Pagada</span>'
-      : '<span class="badge" style="color:#8a978d;background:#eef1ee">Pendiente de pago</span>'}</div>
-  </div>`;
-}
-
+// Inicializar la aplicación
 renderPinGate();
 </script>
 </body>
