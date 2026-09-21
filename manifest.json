@@ -1,0 +1,26 @@
+{
+  "name": "Torneo Sintrainagro",
+  "short_name": "Sintrainagro",
+  "description": "Ingresa con tu PIN para gestionar tu equipo, jugadores y partidos.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#EEF3ED",
+  "theme_color": "#123626",
+  "lang": "es",
+  "icons": [
+    {
+      "src": "logo.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "logo.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
