@@ -77,7 +77,7 @@ const API_URL = 'https://script.google.com/macros/s/AKfycbwSPtk7m5Ulc2EcSQ486KZF
 //  - Si una LECTURA falla (internet flojo o servidor ocupado), se reintenta sola hasta 3 veces.
 //    Los GUARDADOS nunca se reintentan solos, para no duplicar datos.
 const SNAP_TTL_MS = 30000;
-const TIMEOUT_LECTURA_MS = 30000;    // una lectura que tarde más se cancela y se reintenta
+const TIMEOUT_LECTURA_MS = 60000;    // una lectura que tarde más se cancela y se reintenta
 const TIMEOUT_GUARDADO_MS = 120000;  // los guardados esperan más (una foto puede tardar)
 const REINTENTO_BASE_MS = 1200;
 let SNAP = null, SNAP_PROMISE = null, SNAP_GEN = 0, SNAP_OFF = false;
