@@ -74,25 +74,56 @@ const API_URL = 'https://script.google.com/macros/s/AKfycbwSPtk7m5Ulc2EcSQ486KZF
 //  - Después, todas las lecturas (equipos, jugadores, partidos...) salen de la foto al instante.
 //  - Cada vez que se guarda algo, el servidor responde con la foto ya actualizada.
 //  - Si pasan más de 30 segundos, la siguiente lectura pide una foto nueva (una sola consulta).
+//  - Si una LECTURA falla (internet flojo o servidor ocupado), se reintenta sola hasta 3 veces.
+//    Los GUARDADOS nunca se reintentan solos, para no duplicar datos.
 const SNAP_TTL_MS = 30000;
+const TIMEOUT_LECTURA_MS = 30000;    // una lectura que tarde más se cancela y se reintenta
+const TIMEOUT_GUARDADO_MS = 120000;  // los guardados esperan más (una foto puede tardar)
+const REINTENTO_BASE_MS = 1200;
 let SNAP = null, SNAP_PROMISE = null, SNAP_GEN = 0, SNAP_OFF = false;
 
 function clonar(x) { return x === undefined ? x : JSON.parse(JSON.stringify(x)); }
 function sinPermiso(e) { return /no permitida/i.test((e && e.message) || ''); }
+function esperar(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-function rawFull(fn, args) {
+function rawFull(fn, args, timeoutMs) {
+  const ctl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+  const timer = ctl ? setTimeout(() => ctl.abort(), timeoutMs || TIMEOUT_LECTURA_MS) : null;
   return fetch(API_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({ action: fn, params: args })
+    body: JSON.stringify({ action: fn, params: args }),
+    signal: ctl ? ctl.signal : undefined
   })
-    .then(r => r.json())
-    .then(res => {
+    .then(r => r.text())
+    .then(txt => {
+      let res;
+      try { res = JSON.parse(txt); } catch (e) { throw new Error('El servidor respondió algo inesperado'); }
       if (!res.ok) throw new Error(res.error || 'Error desconocido');
       return res;
-    });
+    })
+    .catch(e => {
+      if (e && e.name === 'AbortError') throw new Error('El servidor tardó demasiado en responder');
+      throw e;
+    })
+    .finally(() => { if (timer) clearTimeout(timer); });
 }
-function rawCall(fn, args) { return rawFull(fn, args).then(res => res.data); }
+function rawCall(fn, args, timeoutMs) { return rawFull(fn, args, timeoutMs).then(res => res.data); }
+
+// Repite una LECTURA si falla (hasta 3 intentos, con una pausa creciente entre intentos).
+async function conReintento(hacer, onIntento) {
+  let ultimo;
+  for (let i = 1; i <= 3; i++) {
+    if (onIntento) onIntento(i);
+    try { return await hacer(); }
+    catch (e) {
+      ultimo = e;
+      if (sinPermiso(e) || i === 3) break;
+      await esperar(REINTENTO_BASE_MS * i);
+    }
+  }
+  throw ultimo;
+}
 
 function guardarSnapshot(todo) { SNAP = { t: Date.now(), data: todo }; SNAP_PROMISE = null; SNAP_GEN++; }
 function invalidarSnapshot() { SNAP = null; SNAP_PROMISE = null; SNAP_GEN++; }
@@ -101,7 +132,7 @@ function snapshot() {
   if (SNAP && (Date.now() - SNAP.t) < SNAP_TTL_MS) return Promise.resolve(SNAP.data);
   if (SNAP_PROMISE) return SNAP_PROMISE;
   const gen = SNAP_GEN;
-  const p = rawCall('getTodo', []).then(d => {
+  const p = conReintento(() => rawCall('getTodo', [], TIMEOUT_LECTURA_MS)).then(d => {
     if (gen === SNAP_GEN) SNAP = { t: Date.now(), data: d };
     return d;
   });
@@ -140,8 +171,9 @@ function gsCall(fn, ...args) {
         throw e;
       });
   }
-  return rawFull(fn, args).then(res => {
-    if (!SOLO_LECTURA.has(fn)) {
+  const soloLee = SOLO_LECTURA.has(fn);
+  return rawFull(fn, args, soloLee ? TIMEOUT_LECTURA_MS : TIMEOUT_GUARDADO_MS).then(res => {
+    if (!soloLee) {
       if (res.todo) guardarSnapshot(res.todo); else invalidarSnapshot();
     }
     return res.data;
@@ -149,10 +181,10 @@ function gsCall(fn, ...args) {
 }
 
 // Entrar: verifica el PIN y trae todos los datos en la misma consulta
-async function iniciarSesionApi(pin) {
+async function iniciarSesionApi(pin, onIntento) {
   if (!SNAP_OFF) {
     try {
-      const r = await rawCall('iniciarSesion', [pin]);
+      const r = await conReintento(() => rawCall('iniciarSesion', [pin], TIMEOUT_LECTURA_MS), onIntento);
       if (!r) return null;
       guardarSnapshot(r.todo);
       return r.sesion;
@@ -211,14 +243,14 @@ function resizeImage(file, maxSize=220, quality=0.6){
 const app = document.getElementById('app');
 let STATE = { tab: null, rol: null, team: null };
 
-function renderPinGate(errorMsg) {
+function renderPinGate(errorMsg, pinPrevio) {
   document.getElementById('whoami').innerHTML = '';
   app.innerHTML = `<div style="padding-top:24px">
     <h2 class="bebas" style="font-size:34px;margin:0 0 4px">Ingresa tu PIN</h2>
     <p class="sub">El organizador tiene su PIN. Cada equipo tiene el suyo, distinto e independiente. Los árbitros también tienen un PIN propio. Pídele el tuyo al organizador si no lo tienes.</p>
     <div class="card">
-      <input id="pinInput" class="pin-input" maxlength="6" inputmode="numeric" placeholder="••••">
-      <div style="color:#B3261E;font-size:13px;margin-bottom:8px">${errorMsg ? esc(errorMsg) : ''}</div>
+      <input id="pinInput" class="pin-input" maxlength="6" inputmode="numeric" placeholder="••••" value="${esc(pinPrevio || '')}">
+      <div id="pinError" style="color:#B3261E;font-size:13px;margin-bottom:8px">${errorMsg ? esc(errorMsg) : ''}</div>
       <button class="btn-primary" id="pinBtn" onclick="intentarPin()">Entrar</button>
     </div>
   </div>`;
@@ -233,11 +265,14 @@ async function intentarPin() {
   if (!pin || btn.disabled) return;
   btn.disabled = true;
   btn.textContent = 'Entrando…';
+  const errEl = document.getElementById('pinError');
+  if (errEl) errEl.textContent = '';
   let res;
   try {
-    res = await iniciarSesionApi(pin);
+    res = await iniciarSesionApi(pin, i => { if (i > 1) btn.textContent = 'Reintentando… (' + i + ' de 3)'; });
   } catch (e) {
-    renderPinGate('No se pudo conectar. Revisa tu internet e intenta de nuevo.');
+    console.error('No se pudo entrar:', e);
+    renderPinGate('No se pudo conectar. Revisa tu internet e intenta de nuevo. (Detalle: ' + ((e && e.message) || e) + ')', pin);
     return;
   }
   if (!res) { renderPinGate('PIN incorrecto. Intenta de nuevo.'); return; }
