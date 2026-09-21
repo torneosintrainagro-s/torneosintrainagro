@@ -25,6 +25,7 @@
   input, select { width:100%; padding:12px; border-radius:8px; border:1px solid #d8ded8; margin-bottom:8px; font-size:16px; font-family:inherit; }
   label.chk { display:flex; align-items:center; gap:8px; font-size:15px; margin:10px 0; }
   .btn-primary { background:#123626; color:#fff; border:none; border-radius:10px; padding:12px 18px; font-size:16px; font-weight:600; cursor:pointer; }
+  .btn-primary:disabled { opacity:.6; cursor:wait; }
   .btn-ghost { background:transparent; color:#123626; border:1px solid #c7d2c9; border-radius:10px; padding:12px 18px; font-size:16px; font-weight:600; cursor:pointer; }
   .btn-add { width:100%; background:#fff; border:1px dashed #9db3a2; border-radius:12px; padding:16px; font-size:16px; font-weight:600; color:#123626; cursor:pointer; }
   .badge { font-size:13px; font-weight:600; padding:4px 10px; border-radius:20px; margin-right:6px; display:inline-block; }
@@ -64,22 +65,19 @@
 <script>
 const API_URL = 'https://script.google.com/macros/s/AKfycbwSPtk7m5Ulc2EcSQ486KZFoJiL91dG9sZeKXIFb07oWifRyuQmVobIVlJvFJUawdPK/exec';
 
-// Mientras navegas entre pestañas, estas consultas de solo lectura se reutilizan
-// por unos segundos en vez de volver a pedirlas — cualquier acción que guarde algo
-// (todo lo que no está en esta lista) borra este caché para no mostrar datos viejos.
-const GS_CACHEABLE = ['getEquipos','getPartidos','getJugadores','getJugadoresTodos','getAlineacion','getCambios','getTarjetas','getTarjetasTodas','getGoles','getGolesTodos'];
-const GS_CACHE_TTL_MS = 15000;
-window.__gsCache = window.__gsCache || {};
+// ===================== DATOS EN MEMORIA =====================
+// Cada consulta a Apps Script cuesta ~2 segundos, así que ya no se pide nada por separado:
+//  - Al entrar con el PIN se trae TODO en una sola consulta y se guarda en esta "foto" (SNAP).
+//  - Después, todas las lecturas (equipos, jugadores, partidos...) salen de la foto al instante.
+//  - Cada vez que se guarda algo, el servidor responde con la foto ya actualizada.
+//  - Si pasan más de 30 segundos, la siguiente lectura pide una foto nueva (una sola consulta).
+const SNAP_TTL_MS = 30000;
+let SNAP = null, SNAP_PROMISE = null, SNAP_GEN = 0, SNAP_OFF = false;
 
-function gsCall(fn, ...args) {
-  const cacheable = GS_CACHEABLE.includes(fn);
-  const cacheKey = fn + '|' + JSON.stringify(args);
-  if (cacheable) {
-    const hit = window.__gsCache[cacheKey];
-    if (hit && (Date.now() - hit.t) < GS_CACHE_TTL_MS) {
-      return Promise.resolve(hit.data);
-    }
-  }
+function clonar(x) { return x === undefined ? x : JSON.parse(JSON.stringify(x)); }
+function sinPermiso(e) { return /no permitida/i.test((e && e.message) || ''); }
+
+function rawFull(fn, args) {
   return fetch(API_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
@@ -88,13 +86,79 @@ function gsCall(fn, ...args) {
     .then(r => r.json())
     .then(res => {
       if (!res.ok) throw new Error(res.error || 'Error desconocido');
-      if (cacheable) {
-        window.__gsCache[cacheKey] = { data: res.data, t: Date.now() };
-      } else {
-        window.__gsCache = {};
-      }
-      return res.data;
+      return res;
     });
+}
+function rawCall(fn, args) { return rawFull(fn, args).then(res => res.data); }
+
+function guardarSnapshot(todo) { SNAP = { t: Date.now(), data: todo }; SNAP_PROMISE = null; SNAP_GEN++; }
+function invalidarSnapshot() { SNAP = null; SNAP_PROMISE = null; SNAP_GEN++; }
+
+function snapshot() {
+  if (SNAP && (Date.now() - SNAP.t) < SNAP_TTL_MS) return Promise.resolve(SNAP.data);
+  if (SNAP_PROMISE) return SNAP_PROMISE;
+  const gen = SNAP_GEN;
+  const p = rawCall('getTodo', []).then(d => {
+    if (gen === SNAP_GEN) SNAP = { t: Date.now(), data: d };
+    return d;
+  });
+  SNAP_PROMISE = p;
+  const soltar = () => { if (SNAP_PROMISE === p) SNAP_PROMISE = null; };
+  p.then(soltar, soltar);
+  return p;
+}
+
+// Cómo se obtiene cada lectura a partir de la foto
+const LECTURAS = {
+  getEquipos:        s => s.equipos,
+  getPartidos:       s => s.partidos,
+  getJugadoresTodos: s => s.jugadores,
+  getJugadores:      (s, equipoId) => s.jugadores.filter(p => String(p.equipoId) === String(equipoId)),
+  getTarjetasTodas:  s => s.tarjetas,
+  getTarjetas:       (s, matchId) => matchId ? s.tarjetas.filter(t => String(t.matchId) === String(matchId)) : s.tarjetas,
+  getGolesTodos:     s => s.goles,
+  getGoles:          (s, matchId) => s.goles.filter(g => String(g.matchId) === String(matchId)),
+  getCambios:        (s, matchId, equipoId) => s.cambios.filter(c => String(c.matchId) === String(matchId) && String(c.equipoId) === String(equipoId)),
+  getAlineacion:     (s, matchId, equipoId) => {
+    const a = s.alineaciones.find(x => String(x.matchId) === String(matchId) && String(x.equipoId) === String(equipoId));
+    return a ? { titulares: a.titulares, suplentes: a.suplentes, confirmadoEn: a.confirmadoEn } : null;
+  }
+};
+// Acciones que solo leen: no invalidan la foto
+const SOLO_LECTURA = new Set([...Object.keys(LECTURAS), 'verificarPin', 'getTodo', 'iniciarSesion']);
+
+function gsCall(fn, ...args) {
+  if (LECTURAS[fn] && !SNAP_OFF) {
+    return snapshot()
+      .then(s => clonar(LECTURAS[fn](s, ...args)))
+      .catch(e => {
+        // Si el servidor aún no tiene la versión nueva, se usa el modo anterior (consulta por consulta)
+        if (sinPermiso(e)) { SNAP_OFF = true; return rawCall(fn, args); }
+        throw e;
+      });
+  }
+  return rawFull(fn, args).then(res => {
+    if (!SOLO_LECTURA.has(fn)) {
+      if (res.todo) guardarSnapshot(res.todo); else invalidarSnapshot();
+    }
+    return res.data;
+  });
+}
+
+// Entrar: verifica el PIN y trae todos los datos en la misma consulta
+async function iniciarSesionApi(pin) {
+  if (!SNAP_OFF) {
+    try {
+      const r = await rawCall('iniciarSesion', [pin]);
+      if (!r) return null;
+      guardarSnapshot(r.todo);
+      return r.sesion;
+    } catch (e) {
+      if (!sinPermiso(e)) throw e;
+      SNAP_OFF = true;
+    }
+  }
+  return rawCall('verificarPin', [pin]);
 }
 
 const POSITIONS = ['Portero','Defensa','Volante','Delantero'];
@@ -152,7 +216,7 @@ function renderPinGate(errorMsg) {
     <div class="card">
       <input id="pinInput" class="pin-input" maxlength="6" inputmode="numeric" placeholder="••••">
       <div style="color:#B3261E;font-size:13px;margin-bottom:8px">${errorMsg ? esc(errorMsg) : ''}</div>
-      <button class="btn-primary" onclick="intentarPin()">Entrar</button>
+      <button class="btn-primary" id="pinBtn" onclick="intentarPin()">Entrar</button>
     </div>
   </div>`;
   document.getElementById('pinInput').focus();
@@ -160,9 +224,19 @@ function renderPinGate(errorMsg) {
 }
 
 async function intentarPin() {
-  const pin = document.getElementById('pinInput').value.trim();
-  if (!pin) return;
-  const res = await gsCall('verificarPin', pin);
+  const input = document.getElementById('pinInput');
+  const btn = document.getElementById('pinBtn');
+  const pin = input.value.trim();
+  if (!pin || btn.disabled) return;
+  btn.disabled = true;
+  btn.textContent = 'Entrando…';
+  let res;
+  try {
+    res = await iniciarSesionApi(pin);
+  } catch (e) {
+    renderPinGate('No se pudo conectar. Revisa tu internet e intenta de nuevo.');
+    return;
+  }
   if (!res) { renderPinGate('PIN incorrecto. Intenta de nuevo.'); return; }
   if (res.rol === 'organizador') {
     STATE.rol = 'organizador'; STATE.tab = 'resumen';
@@ -179,7 +253,7 @@ async function intentarPin() {
   }
 }
 
-function cerrarSesion() { STATE = { tab: null, rol: null, team: null }; renderPinGate(); }
+function cerrarSesion() { invalidarSnapshot(); STATE = { tab: null, rol: null, team: null }; renderPinGate(); }
 
 // ================= ORGANIZADOR =================
 async function renderOrg() {
@@ -1104,6 +1178,8 @@ async function arbitroRedibujar() {
   const nombreEquipoDe = {}; [teamA, teamB].forEach(t => nombreEquipoDe[t.id] = t.nombre);
   const nombreJugadorDe = {}; [...playersA, ...playersB].forEach(p => nombreJugadorDe[p.id] = '#' + esc(p.numero) + ' ' + esc(p.nombre));
   const golDe = {}; goles.forEach(g => golDe[g.jugadorId] = g.goles);
+  // Lo que se mostró en pantalla: al guardar solo se envían los goles que el árbitro realmente cambió
+  window.__arGolesBase = {}; goles.forEach(g => window.__arGolesBase[g.jugadorId] = Number(g.goles) || 0);
   const tieneResultado = m.golesA !== '' && m.golesA !== undefined && m.golesA !== null;
 
   let html = `<p class="muted" style="margin-top:-4px">${esc(m.nombre)}${m.fecha?' · '+fmtFechaPartido(m.fecha):''}${m.hora?' '+esc(m.hora):''}</p>
@@ -1174,18 +1250,28 @@ async function arbitroGuardarResultado() {
   alert('Resultado guardado.');
 }
 
+// Solo se envían al servidor los goles que el árbitro cambió (antes se enviaban todos los jugadores, uno por uno).
 async function arbitroGuardarGoles() {
   const teamA = window.__arTeams.a, teamB = window.__arTeams.b, m = window.__arMatch;
   const [playersA, playersB] = await Promise.all([gsCall('getJugadores', teamA.id), gsCall('getJugadores', teamB.id)]);
-  for (const p of playersA) {
-    const v = document.getElementById('gol_' + p.id).value;
-    await gsCall('guardarGolJugador', m.id, p.id, teamA.id, Number(v) || 0);
+  const base = window.__arGolesBase || {};
+  let cambios = 0;
+  try {
+    for (const [team, players] of [[teamA, playersA], [teamB, playersB]]) {
+      for (const p of players) {
+        const el = document.getElementById('gol_' + p.id);
+        if (!el) continue;
+        const nuevo = Number(el.value) || 0;
+        if (nuevo !== (base[p.id] || 0)) {
+          await gsCall('guardarGolJugador', m.id, p.id, team.id, nuevo);
+          cambios++;
+        }
+      }
+    }
+    alert(cambios ? 'Goles guardados.' : 'No hay cambios en los goles.');
+  } catch (e) {
+    alert(e && e.message ? e.message : 'No se pudieron guardar los goles.');
   }
-  for (const p of playersB) {
-    const v = document.getElementById('gol_' + p.id).value;
-    await gsCall('guardarGolJugador', m.id, p.id, teamB.id, Number(v) || 0);
-  }
-  alert('Goles guardados.');
   await arbitroRedibujar();
 }
 
