@@ -886,11 +886,10 @@ function playerCardHtml(p, equipoNombre, orgView) {
 
 // ================= DELEGADO =================
 async function renderDelegate() {
-  const tabs = [['planilla','Planilla'],['carnets','Carnets'],['partidos','Partidos'],['alineacion','Alineación'],['vivo','En vivo']];
+  const tabs = [['planilla','Planilla y carnet'],['partidos','Partidos'],['alineacion','Alineación'],['vivo','En vivo']];
   app.innerHTML = '<div id="content"></div>' + tabBarHtml(tabs, STATE.tab, 'renderDelegate');
   const content = document.getElementById('content');
   if (STATE.tab === 'planilla') content.innerHTML = await planillaHtml();
-  if (STATE.tab === 'carnets') content.innerHTML = await delegateCarnetsHtml();
   if (STATE.tab === 'partidos') content.innerHTML = await delegatePartidosHtml();
   if (STATE.tab === 'alineacion') await alineacionRender(content);
   if (STATE.tab === 'vivo') await enVivoRender(content);
@@ -981,21 +980,47 @@ async function verPartidoDelegado(matchId) {
     resultadoHtml + htmlA + htmlB;
 }
 
+function planillaFilaHtml(p) {
+  const autorizado = p.autorizado === true || String(p.autorizado).toUpperCase() === 'TRUE';
+  const st = STATUS[p.estado] || STATUS.habilitado;
+  return `<div class="card" style="padding:0" id="fila_${p.id}">
+    <div class="row" style="padding:12px;cursor:pointer" onclick="planillaToggle('${p.id}')">
+      <div class="photo ${p.fotoUrl?'clickable':''}" style="width:56px;height:56px" ${p.fotoUrl?`onclick="event.stopPropagation(); verFoto('${esc(p.fotoUrl)}')"`:''}>${p.fotoUrl?`<img src="${esc(p.fotoUrl)}">`:''}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">#${esc(p.numero)} ${esc(p.nombre)}</div>
+        <div class="muted">${esc(p.posicion)} · ${st.label}</div>
+      </div>
+      <div id="flecha_${p.id}" class="muted" style="font-size:18px">▾</div>
+    </div>
+    <div id="detalle_${p.id}" style="display:none;padding:0 12px 12px 12px">
+      <div style="margin-bottom:8px">
+        ${p.rh ? `<span class="badge" style="color:#B3261E;background:#FBEAE9">RH ${esc(p.rh)}</span>` : ''}
+        ${p.cuarenton ? '<span class="badge" style="color:#7A4E00;background:#FDECC8">Cuarentón</span>' : ''}
+        ${p.refuerzo ? '<span class="badge" style="color:#0B5FA5;background:#E3EEFB">Refuerzo</span>' : ''}
+        ${autorizado ? '<span class="badge" style="color:#2E7D46;background:#E3F3E8">Autorizado</span>' : '<span class="badge" style="color:#B8860B;background:#FBF3DC">Pendiente de autorización</span>'}
+      </div>
+      <div class="row" style="gap:8px">
+        <button class="btn-ghost" onclick="event.stopPropagation(); editPlayer('${p.id}')">Editar</button>
+        <button class="btn-ghost" style="color:#B3261E" onclick="event.stopPropagation(); removePlayer('${p.id}')">Eliminar</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function planillaToggle(id) {
+  const detalle = document.getElementById('detalle_' + id);
+  const flecha = document.getElementById('flecha_' + id);
+  const abierto = detalle.style.display !== 'none';
+  detalle.style.display = abierto ? 'none' : 'block';
+  flecha.textContent = abierto ? '▾' : '▴';
+}
+
 async function planillaHtml() {
   const players = await gsCall('getJugadores', STATE.team.id);
-  let html = `<h2 class="bebas">Planilla — ${esc(STATE.team.nombre)}</h2><p class="sub">${players.length} jugador${players.length===1?'':'es'} · Delegado: ${esc(STATE.team.delegado)||'—'} · DT: ${esc(STATE.team.dt)||'—'}</p>`;
+  let html = `<h2 class="bebas">Planilla y carnet — ${esc(STATE.team.nombre)}</h2><p class="sub">${players.length} jugador${players.length===1?'':'es'} · Delegado: ${esc(STATE.team.delegado)||'—'} · DT: ${esc(STATE.team.dt)||'—'}</p>`;
+  html += '<p class="muted" style="margin-top:-8px">Toca un jugador para ver su carnet completo.</p>';
   players.forEach(p => {
-    const autorizado = p.autorizado === true || String(p.autorizado).toUpperCase() === 'TRUE';
-    html += `<div class="card row">
-      <div class="photo ${p.fotoUrl?'clickable':''}" style="width:64px;height:64px" ${p.fotoUrl?`onclick="verFoto('${esc(p.fotoUrl)}')"`:''}>${p.fotoUrl?`<img src="${esc(p.fotoUrl)}">`:''}</div>
-      <div style="flex:1" onclick="editPlayer('${p.id}')">
-        <div style="font-weight:600;font-size:14px">#${esc(p.numero)} ${esc(p.nombre)}${p.cuarenton?' · Cuarentón':''}${p.refuerzo?' · Refuerzo':''}</div>
-        <div class="muted">${esc(p.posicion)} · ${STATUS[p.estado]?.label||''}</div>
-        <div style="margin-top:4px">${autorizado ? '<span class="badge" style="color:#2E7D46;background:#E3F3E8">Autorizado</span>' : '<span class="badge" style="color:#B8860B;background:#FBF3DC">Pendiente de autorización</span>'}</div>
-      </div>
-      <button class="btn-ghost" onclick="editPlayer('${p.id}')">Editar</button>
-      <button class="btn-ghost" style="color:#B3261E" onclick="removePlayer('${p.id}')">Eliminar</button>
-    </div>`;
+    html += planillaFilaHtml(p);
   });
   html += `<button class="btn-add" id="addPlayerBtn" onclick="showPlayerForm()">+ Agregar jugador</button>
   <div class="card" id="playerForm" style="display:none">
@@ -1077,13 +1102,6 @@ async function savePlayer() {
 async function removePlayer(id) {
   await gsCall('eliminarJugador', id);
   renderDelegate();
-}
-
-async function delegateCarnetsHtml() {
-  const players = await gsCall('getJugadores', STATE.team.id);
-  let html = `<h2 class="bebas">Carnets — ${esc(STATE.team.nombre)}</h2><p class="sub">${players.length} jugador(es) en la plantilla</p>`;
-  html += '<div class="stack">' + players.map(p => playerCardHtml(p)).join('') + '</div>';
-  return html;
 }
 
 async function alineacionRender(content) {
