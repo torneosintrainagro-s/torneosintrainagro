@@ -1407,13 +1407,12 @@ async function arbitroRedibujar() {
     <div class="muted" style="margin-bottom:8px">Resultado del partido</div>
     <div class="row" style="align-items:center;gap:10px">
       <div style="flex:1;font-size:13px;font-weight:600">${esc(teamA.nombre)}</div>
-      <input type="number" min="0" id="ar_golesA" value="${tieneResultado?esc(m.golesA):''}" style="width:70px;text-align:center;margin:0" oninput="arbitroHabilitarResultado()">
+      <input type="number" min="0" id="ar_golesA" value="${tieneResultado?esc(m.golesA):''}" ${tieneResultado?'disabled':''} style="width:70px;text-align:center;margin:0">
       <div class="bebas" style="font-size:20px">-</div>
-      <input type="number" min="0" id="ar_golesB" value="${tieneResultado?esc(m.golesB):''}" style="width:70px;text-align:center;margin:0" oninput="arbitroHabilitarResultado()">
+      <input type="number" min="0" id="ar_golesB" value="${tieneResultado?esc(m.golesB):''}" ${tieneResultado?'disabled':''} style="width:70px;text-align:center;margin:0">
       <div style="flex:1;font-size:13px;font-weight:600;text-align:right">${esc(teamB.nombre)}</div>
     </div>
-    <button class="btn-primary" id="ar_btn_resultado" style="margin-top:10px;width:100%" ${tieneResultado?'disabled':''} onclick="arbitroGuardarResultado()">${tieneResultado?"✓ Resultado guardado":"Guardar resultado"}</button>
-  </div>
+      </div>
 
   <div class="card">
     <div class="muted" style="margin-bottom:8px">Goles por jugador</div>
@@ -1425,9 +1424,9 @@ async function arbitroRedibujar() {
     <div style="font-weight:600;font-size:13px;margin:10px 0 4px">${esc(teamB.nombre)}</div>
     ${playersB.map(p => `<div class="row" style="align-items:center;margin-bottom:6px">
       <div style="flex:1;font-size:14px">#${esc(p.numero)} ${esc(p.nombre)}</div>
-      <input type="number" min="0" id="gol_${p.id}" value="${golDe[p.id]||''}" placeholder="0" style="width:60px;text-align:center;margin:0">
+      <input type="number" min="0" id="gol_${p.id}" value="${golDe[p.id]||''}" placeholder="0" ${tieneResultado?'disabled':''} style="width:60px;text-align:center;margin:0">
     </div>`).join('')}
-    <button class="btn-primary" id="ar_btn_goles" style="margin-top:6px;width:100%" onclick="arbitroGuardarGoles()">Guardar goles</button>
+    <button class="btn-primary" id="ar_btn_todo" style="margin-top:6px;width:100%" ${tieneResultado?'disabled':''} onclick="arbitroGuardarTodo()">${tieneResultado?"✓ Guardado":"Guardar goles y resultado"}</button>
   </div>
 
   <div class="card">
@@ -1461,74 +1460,68 @@ function arbitroToggleSancion() {
   document.getElementById('ar_sancion_wrap').style.display = tipo === 'roja' ? 'block' : 'none';
 }
 
-function arbitroHabilitarResultado() {
-  const btn = document.getElementById('ar_btn_resultado');
-  if (btn && btn.disabled) { btn.disabled = false; btn.textContent = 'Guardar resultado'; }
-}
-
-async function arbitroGuardarResultado() {
-  const btn = document.getElementById('ar_btn_resultado');
+// Guarda el resultado del partido Y los goles por jugador en un solo paso.
+// Al terminar bien, el botón queda bloqueado diciendo "✓ Guardado" y no se vuelve a activar solo:
+// para corregir algo hay que volver a elegir el partido (eso refresca todo el panel).
+async function arbitroGuardarTodo() {
+  const btn = document.getElementById('ar_btn_todo');
   if (btn.disabled) return;   // evita el doble clic mientras se está guardando
   const m = window.__arMatch;
   const golesA = document.getElementById('ar_golesA').value;
   const golesB = document.getElementById('ar_golesB').value;
   if (golesA === '' || golesB === '') { alert('Completa el marcador de ambos equipos.'); return; }
-  btn.disabled = true;
-  const textoOriginal = btn.textContent;
-  btn.textContent = 'Guardando…';
-  try {
-    await gsCall('guardarResultado', m.id, Number(golesA), Number(golesB));
-    btn.textContent = '✓ Resultado guardado';   // sigue bloqueado a propósito: cambiar el marcador lo vuelve a habilitar
-  } catch (e) {
-    btn.disabled = false;
-    btn.textContent = textoOriginal;
-    alert(e && e.message ? e.message : 'No se pudo guardar el resultado.');
-  }
-}
 
-// Solo se envían al servidor los goles que el árbitro cambió (antes se enviaban todos los jugadores, uno por uno).
-async function arbitroGuardarGoles() {
-  const btn = document.getElementById('ar_btn_goles');
-  if (btn.disabled) return;   // evita el doble clic mientras se está guardando
-  const teamA = window.__arTeams.a, teamB = window.__arTeams.b, m = window.__arMatch;
+  const teamA = window.__arTeams.a, teamB = window.__arTeams.b;
   const [playersA, playersB] = await Promise.all([gsCall('getJugadores', teamA.id), gsCall('getJugadores', teamB.id)]);
   const base = window.__arGolesBase || {};
-  // Se juntan primero TODOS los cambios y se mandan en un solo pedido al servidor,
-  // en vez de uno por jugador (eso era lo que hacía que "Guardando…" se quedara pegado un buen rato).
-  const cambios = [];
+  const cambiosGoles = [];
   for (const [team, players] of [[teamA, playersA], [teamB, playersB]]) {
     for (const p of players) {
       const el = document.getElementById('gol_' + p.id);
       if (!el) continue;
       const nuevo = Number(el.value) || 0;
-      if (nuevo !== (base[p.id] || 0)) cambios.push([p.id, team.id, nuevo]);
+      if (nuevo !== (base[p.id] || 0)) cambiosGoles.push([p.id, team.id, nuevo]);
     }
   }
-  if (cambios.length > 0) {
-    btn.disabled = true;
-    const textoOriginal = btn.textContent;
-    btn.textContent = 'Guardando…';
-    try {
-      await gsCall('guardarGolesLote', m.id, cambios);
-      alert('Goles guardados.');
-    } catch (e) {
-      btn.disabled = false;
-      btn.textContent = textoOriginal;
-      alert(e && e.message ? e.message : 'No se pudieron guardar los goles.');
-    }
-  } else {
-    alert('No hay cambios en los goles.');
+
+  btn.disabled = true;
+  const textoOriginal = btn.textContent;
+  btn.textContent = 'Guardando…';
+  let resultadoGuardado = false;
+  try {
+    await gsCall('guardarResultado', m.id, Number(golesA), Number(golesB));
+    resultadoGuardado = true;
+    if (cambiosGoles.length > 0) await gsCall('guardarGolesLote', m.id, cambiosGoles);
+    btn.textContent = '✓ Guardado';
+    document.getElementById('ar_golesA').disabled = true;
+    document.getElementById('ar_golesB').disabled = true;
+    [...playersA, ...playersB].forEach(p => { const el = document.getElementById('gol_' + p.id); if (el) el.disabled = true; });
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = textoOriginal;
+    const detalle = (e && e.message) ? e.message : 'No se pudo guardar.';
+    alert(resultadoGuardado
+      ? 'El resultado sí se guardó, pero los goles por jugador no. Puedes tocar "Guardar goles y resultado" otra vez para intentarlo de nuevo. (Detalle: ' + detalle + ')'
+      : detalle);
   }
-  await arbitroRedibujar();   // redibuja el panel completo: el botón de goles vuelve a nacer normal
 }
 
+// Solo se envían al servidor los goles que el árbitro cambió (antes se enviaban todos los jugadores, uno por uno).
 async function arbitroCargarJugadores() {
   const equipoId = document.getElementById('ar_equipo').value;
   const lista = document.getElementById('ar_jugador_lista');
   document.getElementById('ar_jugador').value = '';
   if (!equipoId) { lista.className = 'muted'; lista.innerHTML = 'Elige primero el equipo…'; return; }
   lista.className = 'muted'; lista.innerHTML = 'Cargando…';
-  const players = await gsCall('getJugadores', equipoId);
+  let players;
+  try {
+    players = await gsCall('getJugadores', equipoId);
+  } catch (e) {
+    lista.className = 'muted';
+    lista.innerHTML = 'No se pudo cargar la lista. (Detalle: ' + esc((e && e.message) || e) + ')' +
+      '<div style="margin-top:8px"><button class="btn-ghost" onclick="arbitroCargarJugadores()">Reintentar</button></div>';
+    return;
+  }
   lista.className = 'stack';
   if (players.length === 0) { lista.className = 'muted'; lista.innerHTML = 'Este equipo no tiene jugadores registrados.'; return; }
   lista.innerHTML = players.map(p => `<div class="card row" id="arp_${p.id}" style="cursor:pointer;align-items:center;padding:8px" onclick="arbitroSeleccionarJugador('${p.id}')">
