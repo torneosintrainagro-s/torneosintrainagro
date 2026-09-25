@@ -1448,7 +1448,7 @@ async function arbitroRedibujar() {
       <input type="number" min="1" id="ar_sancion" placeholder="¿Cuántas fechas de suspensión?">
     </div>
     <textarea id="ar_obs" rows="3" placeholder="Observaciones (motivo, detalle de la sanción, etc.)" style="width:100%;padding:12px;border-radius:8px;border:1px solid #d8ded8;font-family:inherit;font-size:16px;margin-bottom:8px"></textarea>
-    <button class="btn-primary" onclick="arbitroRegistrar()">Registrar tarjeta</button>
+    <button class="btn-primary" id="ar_btn_tarjeta" onclick="arbitroRegistrar()">Registrar tarjeta</button>
   </div>
   <div class="muted" style="margin:14px 0 6px">Tarjetas de este partido</div>`;
   if (tarjetas.length === 0) html += '<p class="muted">Aún no hay tarjetas registradas en este partido.</p>';
@@ -1490,28 +1490,34 @@ async function arbitroGuardarResultado() {
 async function arbitroGuardarGoles() {
   const btn = document.getElementById('ar_btn_goles');
   if (btn.disabled) return;   // evita el doble clic mientras se está guardando
-  btn.disabled = true;
-  const textoOriginal = btn.textContent;
-  btn.textContent = 'Guardando…';
   const teamA = window.__arTeams.a, teamB = window.__arTeams.b, m = window.__arMatch;
   const [playersA, playersB] = await Promise.all([gsCall('getJugadores', teamA.id), gsCall('getJugadores', teamB.id)]);
   const base = window.__arGolesBase || {};
-  let cambios = 0;
-  try {
-    for (const [team, players] of [[teamA, playersA], [teamB, playersB]]) {
-      for (const p of players) {
-        const el = document.getElementById('gol_' + p.id);
-        if (!el) continue;
-        const nuevo = Number(el.value) || 0;
-        if (nuevo !== (base[p.id] || 0)) {
-          await gsCall('guardarGolJugador', m.id, p.id, team.id, nuevo);
-          cambios++;
-        }
-      }
+  // Se juntan primero TODOS los cambios y se mandan en un solo pedido al servidor,
+  // en vez de uno por jugador (eso era lo que hacía que "Guardando…" se quedara pegado un buen rato).
+  const cambios = [];
+  for (const [team, players] of [[teamA, playersA], [teamB, playersB]]) {
+    for (const p of players) {
+      const el = document.getElementById('gol_' + p.id);
+      if (!el) continue;
+      const nuevo = Number(el.value) || 0;
+      if (nuevo !== (base[p.id] || 0)) cambios.push([p.id, team.id, nuevo]);
     }
-    alert(cambios ? 'Goles guardados.' : 'No hay cambios en los goles.');
-  } catch (e) {
-    alert(e && e.message ? e.message : 'No se pudieron guardar los goles.');
+  }
+  if (cambios.length > 0) {
+    btn.disabled = true;
+    const textoOriginal = btn.textContent;
+    btn.textContent = 'Guardando…';
+    try {
+      await gsCall('guardarGolesLote', m.id, cambios);
+      alert('Goles guardados.');
+    } catch (e) {
+      btn.disabled = false;
+      btn.textContent = textoOriginal;
+      alert(e && e.message ? e.message : 'No se pudieron guardar los goles.');
+    }
+  } else {
+    alert('No hay cambios en los goles.');
   }
   await arbitroRedibujar();   // redibuja el panel completo: el botón de goles vuelve a nacer normal
 }
@@ -1542,6 +1548,8 @@ function arbitroSeleccionarJugador(id) {
 }
 
 async function arbitroRegistrar() {
+  const btn = document.getElementById('ar_btn_tarjeta');
+  if (btn.disabled) return;   // evita el doble clic mientras se está guardando (por eso se duplicaban las tarjetas)
   const m = window.__arMatch, teams = window.__arTeams;
   const equipoId = document.getElementById('ar_equipo').value;
   const jugadorId = document.getElementById('ar_jugador').value;
@@ -1550,11 +1558,20 @@ async function arbitroRegistrar() {
   const sancion = document.getElementById('ar_sancion').value;
   if (!equipoId || !jugadorId) return;
   if (tipo === 'roja' && !sancion) { alert('Indica cuántas fechas de suspensión lleva la tarjeta roja.'); return; }
-  const team = (teams.a.id === equipoId) ? teams.a : teams.b;
-  const players = await gsCall('getJugadores', equipoId);
-  const jugador = players.find(p => p.id === jugadorId);
-  await gsCall('addTarjeta', m.id, equipoId, jugadorId, tipo, obs, team.nombre, jugador ? jugador.nombre : '', m.nombre, m.jornada, sancion ? Number(sancion) : 0);
-  await arbitroRedibujar();
+  btn.disabled = true;
+  const textoOriginal = btn.textContent;
+  btn.textContent = 'Guardando…';
+  try {
+    const team = (teams.a.id === equipoId) ? teams.a : teams.b;
+    const players = await gsCall('getJugadores', equipoId);
+    const jugador = players.find(p => p.id === jugadorId);
+    await gsCall('addTarjeta', m.id, equipoId, jugadorId, tipo, obs, team.nombre, jugador ? jugador.nombre : '', m.nombre, m.jornada, sancion ? Number(sancion) : 0);
+    await arbitroRedibujar();   // redibuja todo el panel: el botón vuelve a nacer normal, listo para la siguiente tarjeta
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = textoOriginal;
+    alert(e && e.message ? e.message : 'No se pudo registrar la tarjeta.');
+  }
 }
 
 function tarjetaCardHtml(t, nombreEquipoDe, nombreJugadorDe) {
