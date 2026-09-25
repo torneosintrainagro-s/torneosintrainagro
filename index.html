@@ -601,6 +601,26 @@ async function orgRevocarAutorizacion(id) {
   if (window.__currentOrgTeamId) verCarnetsEquipo(window.__currentOrgTeamId);
 }
 
+function orgPartidoCardHtml(m, nombreDe) {
+  return `<div class="card">
+    <div onclick="verPartido('${m.id}')" style="cursor:pointer">
+      <div style="font-weight:600">${esc(m.nombre)}</div>
+      <div class="muted">${esc(nombreDe[m.equipoA])} vs ${esc(nombreDe[m.equipoB])}${m.fecha?' · '+fmtFechaPartido(m.fecha):''}${m.hora?' · '+esc(m.hora):''}</div>
+      ${m.cancha?`<div class="muted">📍 ${esc(m.cancha)}</div>`:''}
+      ${m.observaciones?`<div class="muted" style="color:#B8860B;margin-top:4px">⚠ ${esc(m.observaciones)}</div>`:''}
+    </div>
+    <button class="btn-ghost" style="margin-top:8px" onclick="event.stopPropagation(); editarPartidoForm('${m.id}')">Editar día / hora / cancha</button>
+  </div>`;
+}
+
+function orgPartidosToggleFecha(j) {
+  const bloque = document.getElementById('op_fecha_' + j);
+  const flecha = document.getElementById('op_flecha_' + j);
+  const abierto = bloque.style.display !== 'none';
+  bloque.style.display = abierto ? 'none' : 'block';
+  flecha.textContent = abierto ? '▾' : '▴';
+}
+
 async function orgPartidosHtml() {
   const [matches, teams] = await Promise.all([gsCall('getPartidos'), gsCall('getEquipos')]);
   const nombreDe = {}; teams.forEach(t => nombreDe[t.id] = t.nombre);
@@ -617,16 +637,23 @@ async function orgPartidosHtml() {
     </div>`;
   }
   if (matches.length === 0) html += '<p class="muted">Aún no hay partidos programados.</p>';
-  for (const m of matches) {
-    html += `<div class="card">
-      <div onclick="verPartido('${m.id}')" style="cursor:pointer">
-        <div style="font-weight:600">${esc(m.nombre)}</div>
-        <div class="muted">${esc(nombreDe[m.equipoA])} vs ${esc(nombreDe[m.equipoB])}${m.fecha?' · '+fmtFechaPartido(m.fecha):''}${m.hora?' · '+esc(m.hora):''}</div>
-        ${m.cancha?`<div class="muted">📍 ${esc(m.cancha)}</div>`:''}
-        ${m.observaciones?`<div class="muted" style="color:#B8860B;margin-top:4px">⚠ ${esc(m.observaciones)}</div>`:''}
+  fechas.forEach(j => {
+    const partidosFecha = matches.filter(m => Number(m.jornada) === j);
+    html += `<div class="card" style="padding:0">
+      <div class="row" style="padding:12px;cursor:pointer" onclick="orgPartidosToggleFecha(${j})">
+        <div style="flex:1;font-weight:600">Fecha ${j}</div>
+        <div class="muted">${partidosFecha.length} partido${partidosFecha.length===1?'':'s'}</div>
+        <div id="op_flecha_${j}" class="muted" style="font-size:18px;margin-left:8px">▾</div>
       </div>
-      <button class="btn-ghost" style="margin-top:8px" onclick="event.stopPropagation(); editarPartidoForm('${m.id}')">Editar día / hora / cancha</button>
+      <div id="op_fecha_${j}" style="display:none;padding:0 12px 12px 12px">
+        ${partidosFecha.map(m => orgPartidoCardHtml(m, nombreDe)).join('')}
+      </div>
     </div>`;
+  });
+  const sinFecha = matches.filter(m => isNaN(Number(m.jornada)) || Number(m.jornada) <= 0);
+  if (sinFecha.length > 0) {
+    html += `<div class="muted" style="margin:10px 0 4px">Sin fecha asignada</div>`;
+    sinFecha.forEach(m => { html += orgPartidoCardHtml(m, nombreDe); });
   }
   html += `<div class="card" id="matchForm" style="display:none">
     <div class="muted" id="matchFormTitle" style="margin-bottom:6px">Nuevo partido</div>
