@@ -948,7 +948,47 @@ async function delegatePartidosHtml() {
       ${tieneResultado ? `<div class="bebas" style="font-size:20px;color:#123626">${marcador}</div>` : '<span class="badge" style="color:#8a978d;background:#eef1ee">Sin jugar</span>'}
     </div>`;
   });
+
+  html += await asistenciaHtml(misPartidos);
   return html;
+}
+
+// Cuenta, para cada jugador del equipo, en cuántas fechas YA JUGADAS estuvo en la alineación confirmada
+// (titular o suplente). No usa fotos a propósito, para que cargue rápido con equipos grandes.
+async function asistenciaHtml(misPartidos) {
+  const jugados = misPartidos.filter(m => m.golesA !== '' && m.golesA !== undefined && m.golesA !== null);
+  const players = await gsCall('getJugadores', STATE.team.id);
+  const conteo = {}; players.forEach(p => { conteo[p.id] = 0; });
+  for (const m of jugados) {
+    const lu = await gsCall('getAlineacion', m.id, STATE.team.id);
+    if (!lu) continue;
+    new Set([...lu.titulares, ...lu.suplentes]).forEach(id => { if (conteo[id] !== undefined) conteo[id]++; });
+  }
+  const filas = players
+    .map(p => ({ nombre: p.nombre, numero: p.numero, veces: conteo[p.id] || 0 }))
+    .sort((a, b) => b.veces - a.veces || a.nombre.localeCompare(b.nombre));
+
+  return `<div class="card" style="padding:0;margin-top:12px">
+    <div class="row" style="padding:12px;cursor:pointer" onclick="toggleAsistencia()">
+      <div style="flex:1;font-weight:600">Asistencia por partido</div>
+      <div id="asis_flecha" class="muted" style="font-size:18px">▾</div>
+    </div>
+    <div id="asis_body" style="display:none;padding:0 12px 12px 12px">
+      <p class="muted" style="margin-top:0">Fechas ya jugadas (con resultado) en las que cada jugador estuvo en la alineación confirmada, de ${jugados.length} fecha${jugados.length===1?'':'s'} jugada${jugados.length===1?'':'s'} en total.</p>
+      ${players.length === 0 ? '<p class="muted">Este equipo aún no tiene jugadores.</p>' : `
+      <div style="overflow-x:auto"><table class="resumen"><thead><tr><th style="text-align:left">Jugador</th><th>Fechas jugadas</th></tr></thead><tbody>
+        ${filas.map(f => `<tr><td style="text-align:left">#${esc(f.numero)} ${esc(f.nombre)}</td><td><strong>${f.veces}</strong></td></tr>`).join('')}
+      </tbody></table></div>`}
+    </div>
+  </div>`;
+}
+
+function toggleAsistencia() {
+  const body = document.getElementById('asis_body');
+  const flecha = document.getElementById('asis_flecha');
+  const abierto = body.style.display !== 'none';
+  body.style.display = abierto ? 'none' : 'block';
+  flecha.textContent = abierto ? '▾' : '▴';
 }
 
 async function verPartidoDelegado(matchId) {
