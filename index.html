@@ -776,8 +776,11 @@ async function orgTarjetasHtml() {
   const nombrePartidoDe = {}; matches.forEach(m => nombrePartidoDe[m.id] = m.nombre);
   window.__tarjetasData = { tarjetas, teams, nombreEquipoDe, nombreJugadorDe, nombrePartidoDe };
 
+  const estaPagada = t => t.pagada === true || String(t.pagada).toUpperCase() === 'TRUE';
   const totalAmarillas = tarjetas.filter(t => t.tipo === 'amarilla').length;
   const totalRojas = tarjetas.filter(t => t.tipo === 'roja').length;
+  const totalPagadas = tarjetas.filter(estaPagada).length;
+  const totalPendientes = tarjetas.length - totalPagadas;
 
   let html = `<h2 class="bebas">Amonestaciones</h2><p class="sub">Tarjetas y sanciones registradas por los árbitros. Solo se puede eliminar una tarjeta después de marcarla como pagada.</p>`;
 
@@ -789,6 +792,14 @@ async function orgTarjetasHtml() {
     <div class="card" style="text-align:center;padding:10px">
       <div class="muted" style="font-size:12px">Total rojas</div>
       <div class="bebas" style="font-size:26px;color:#B3261E">${totalRojas}</div>
+    </div>
+    <div class="card" style="text-align:center;padding:10px">
+      <div class="muted" style="font-size:12px">Total pagadas</div>
+      <div class="bebas" style="font-size:26px;color:#2E7D46">${totalPagadas}</div>
+    </div>
+    <div class="card" style="text-align:center;padding:10px">
+      <div class="muted" style="font-size:12px">Sin pagar</div>
+      <div class="bebas" style="font-size:26px;color:#8a978d">${totalPendientes}</div>
     </div>
   </div>`;
 
