@@ -1200,6 +1200,7 @@ async function enVivoRender(content) {
   const matches = allMatches.filter(m => m.equipoA === STATE.team.id || m.equipoB === STATE.team.id);
   const nombreEquipoDe = {}; teams.forEach(t => nombreEquipoDe[t.id] = t.nombre);
   const rivalDe = (m) => m.equipoA === STATE.team.id ? nombreEquipoDe[m.equipoB] : nombreEquipoDe[m.equipoA];
+  window.__evMatches = matches;
   content.innerHTML = `<h2 class="bebas">Partido en vivo — ${esc(STATE.team.nombre)}</h2><p class="sub">Registra los cambios a medida que ocurren</p>
     <select id="ev_match" onchange="enVivoCargar()"><option value="">Elige un partido…</option>${matches.map(m=>`<option value="${m.id}">${esc(m.nombre)} · vs ${esc(rivalDe(m)||'—')}${m.fecha?' · '+fmtFechaPartido(m.fecha):''}${m.hora?' '+esc(m.hora):''}${m.cancha?' · '+esc(m.cancha):''}</option>`).join('')}</select>
     <div id="ev_body"></div>`;
@@ -1208,6 +1209,17 @@ async function enVivoCargar() {
   const matchId = document.getElementById('ev_match').value;
   const body = document.getElementById('ev_body');
   if (!matchId) { body.innerHTML=''; return; }
+  const partido = (window.__evMatches || []).find(m => m.id === matchId);
+  const yaJugado = partido && partido.golesA !== '' && partido.golesA !== undefined && partido.golesA !== null;
+  if (yaJugado) {
+    body.innerHTML = `<div class="card" style="text-align:center;padding:20px">
+      <div style="font-size:32px;margin-bottom:8px">🏁</div>
+      <div style="font-weight:600;margin-bottom:4px">Este partido ya se jugó</div>
+      <p class="muted" style="margin:0">El árbitro ya registró el resultado final, así que no se pueden hacer más cambios aquí.
+      Ve a la pestaña <strong>Partidos</strong> para ver el resultado, la alineación y los cambios de este partido.</p>
+    </div>`;
+    return;
+  }
   const lu = await gsCall('getAlineacion', matchId, STATE.team.id);
   if (!lu) { body.innerHTML = '<p class="muted">Primero confirma la alineación titular en la pestaña Alineación.</p>'; return; }
   const players = await gsCall('getJugadores', STATE.team.id);
@@ -1276,10 +1288,28 @@ async function renderArbitro() {
 async function arbitroHtml() {
   const [matches, teams] = await Promise.all([gsCall('getPartidos'), gsCall('getEquipos')]);
   const nombreEquipoDe = {}; teams.forEach(t => nombreEquipoDe[t.id] = t.nombre);
-  let html = `<h2 class="bebas">Panel del árbitro</h2><p class="sub">Elige el partido para registrar el resultado, los goles y las tarjetas.</p>
-    <select id="ar_match" onchange="arbitroCargarPartido()"><option value="">Elige un partido…</option>${matches.map(m=>`<option value="${m.id}">${esc(m.nombre)} · ${esc(nombreEquipoDe[m.equipoA]||'—')} vs ${esc(nombreEquipoDe[m.equipoB]||'—')}${m.fecha?' · '+fmtFechaPartido(m.fecha):''}${m.hora?' '+esc(m.hora):''}${m.cancha?' · '+esc(m.cancha):''}</option>`).join('')}</select>
+  window.__arAllMatches = matches;
+  window.__arNombreEquipoDe = nombreEquipoDe;
+  const fechas = [...new Set(matches.map(m => m.jornada).filter(j => j !== '' && j !== undefined && j !== null))]
+    .sort((a, b) => Number(a) - Number(b));
+  let html = `<h2 class="bebas">Panel del árbitro</h2><p class="sub">Elige la fecha y luego el partido, para registrar el resultado, los goles y las tarjetas.</p>
+    <select id="ar_jornada" onchange="arbitroFiltrarPartidos()"><option value="">Elige una fecha…</option>${fechas.map(j=>`<option value="${esc(j)}">Fecha ${esc(j)}</option>`).join('')}</select>
+    <select id="ar_match" onchange="arbitroCargarPartido()" style="display:none"><option value="">Elige un partido…</option></select>
     <div id="ar_body"></div>`;
   return html;
+}
+
+function arbitroFiltrarPartidos() {
+  const jornada = document.getElementById('ar_jornada').value;
+  const sel = document.getElementById('ar_match');
+  document.getElementById('ar_body').innerHTML = '';
+  if (!jornada) { sel.style.display = 'none'; sel.innerHTML = '<option value="">Elige un partido…</option>'; return; }
+  const nombreEquipoDe = window.__arNombreEquipoDe;
+  const partidos = (window.__arAllMatches || []).filter(m => String(m.jornada) === String(jornada));
+  sel.innerHTML = '<option value="">Elige un partido…</option>' +
+    partidos.map(m => `<option value="${m.id}">${esc(nombreEquipoDe[m.equipoA]||'—')} vs ${esc(nombreEquipoDe[m.equipoB]||'—')}${m.fecha?' · '+fmtFechaPartido(m.fecha):''}${m.hora?' '+esc(m.hora):''}${m.cancha?' · '+esc(m.cancha):''}</option>`).join('');
+  sel.style.display = '';
+  sel.value = '';
 }
 
 async function arbitroCargarPartido() {
