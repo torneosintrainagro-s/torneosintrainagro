@@ -913,7 +913,7 @@ function playerCardHtml(p, equipoNombre, orgView) {
 
 // ================= DELEGADO =================
 async function renderDelegate() {
-  const tabs = [['planilla','Planilla y carnet'],['partidos','Partidos'],['alineacion','Alineación'],['vivo','En vivo']];
+  const tabs = [['planilla','Planilla y carnet'],['partidos','Partidos'],['alineacion','Alineación'],['vivo','Sustituciones']];
   app.innerHTML = '<div id="content"></div>' + tabBarHtml(tabs, STATE.tab, 'renderDelegate');
   const content = document.getElementById('content');
   if (STATE.tab === 'planilla') content.innerHTML = await planillaHtml();
@@ -1268,7 +1268,7 @@ async function enVivoRender(content) {
   const nombreEquipoDe = {}; teams.forEach(t => nombreEquipoDe[t.id] = t.nombre);
   const rivalDe = (m) => m.equipoA === STATE.team.id ? nombreEquipoDe[m.equipoB] : nombreEquipoDe[m.equipoA];
   window.__evMatches = matches;
-  content.innerHTML = `<h2 class="bebas">Partido en vivo — ${esc(STATE.team.nombre)}</h2><p class="sub">Registra los cambios a medida que ocurren</p>
+  content.innerHTML = `<h2 class="bebas">Sustituciones — ${esc(STATE.team.nombre)}</h2><p class="sub">Registra las entradas y salidas del partido</p>
     <select id="ev_match" onchange="enVivoCargar()"><option value="">Elige un partido…</option>${matches.map(m=>`<option value="${m.id}">${esc(m.nombre)} · vs ${esc(rivalDe(m)||'—')}${m.fecha?' · '+fmtFechaPartido(m.fecha):''}${m.hora?' '+esc(m.hora):''}${m.cancha?' · '+esc(m.cancha):''}</option>`).join('')}</select>
     <div id="ev_body"></div>`;
 }
