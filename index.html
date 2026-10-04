@@ -602,6 +602,7 @@ async function orgRevocarAutorizacion(id) {
 }
 
 function orgPartidoCardHtml(m, nombreDe) {
+  const tieneResultado = m.golesA !== '' && m.golesA !== undefined && m.golesA !== null;
   return `<div class="card">
     <div onclick="verPartido('${m.id}')" style="cursor:pointer">
       <div style="font-weight:600">${esc(m.nombre)}</div>
@@ -610,7 +611,21 @@ function orgPartidoCardHtml(m, nombreDe) {
       ${m.observaciones?`<div class="muted" style="color:#B8860B;margin-top:4px">⚠ ${esc(m.observaciones)}</div>`:''}
     </div>
     <button class="btn-ghost" style="margin-top:8px" onclick="event.stopPropagation(); editarPartidoForm('${m.id}')">Editar día / hora / cancha</button>
+    ${tieneResultado ? `<button class="btn-ghost" style="margin-top:6px;color:#B3261E" onclick="event.stopPropagation(); orgReiniciarResultado('${m.id}')">Reiniciar resultado (por error del árbitro)</button>` : ''}
   </div>`;
+}
+
+// Solo para el organizador: deja un partido como si nunca se hubiera calificado, para corregir
+// un error del árbitro (por ejemplo, calificó un partido de ensayo por equivocación).
+async function orgReiniciarResultado(matchId) {
+  if (!confirm('¿Reiniciar el resultado de este partido?\n\nEsto borra el marcador, los goles por jugador y las tarjetas que ya se habían registrado en este partido. El partido queda listo para calificarse de nuevo desde cero.')) return;
+  try {
+    await gsCall('reiniciarResultadoPartido', matchId);
+    alert('Listo: el partido quedó sin calificar.');
+    await renderOrg();
+  } catch (e) {
+    alert(e && e.message ? e.message : 'No se pudo reiniciar el partido.');
+  }
 }
 
 function orgPartidosToggleFecha(j) {
