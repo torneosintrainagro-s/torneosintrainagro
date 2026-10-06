@@ -81,6 +81,7 @@ const TIMEOUT_LECTURA_MS = 60000;    // una lectura que tarde más se cancela y 
 const TIMEOUT_GUARDADO_MS = 120000;  // los guardados esperan más (una foto puede tardar)
 const REINTENTO_BASE_MS = 1200;
 let SNAP = null, SNAP_PROMISE = null, SNAP_GEN = 0, SNAP_OFF = false;
+let SESION_PIN = null;   // el PIN de quien inició sesión: se manda en cada pedido para que el servidor sepa quién es
 
 function clonar(x) { return x === undefined ? x : JSON.parse(JSON.stringify(x)); }
 // Solo detecta el caso real: un servidor VIEJO que todavía no conoce estas dos funciones nuevas.
@@ -95,14 +96,19 @@ function rawFull(fn, args, timeoutMs) {
   return fetch(API_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({ action: fn, params: args }),
+    body: JSON.stringify({ action: fn, params: args, pin: SESION_PIN }),
     signal: ctl ? ctl.signal : undefined
   })
     .then(r => r.text())
     .then(txt => {
       let res;
       try { res = JSON.parse(txt); } catch (e) { throw new Error('El servidor respondió algo inesperado'); }
-      if (!res.ok) throw new Error(res.error || 'Error desconocido');
+      if (!res.ok) {
+        if (res.codigo === 'SESION') sesionVencida();
+        const err = new Error(res.error || 'Error desconocido');
+        err.codigo = res.codigo;
+        throw err;
+      }
       return res;
     })
     .catch(e => {
@@ -121,7 +127,7 @@ async function conReintento(hacer, onIntento) {
     try { return await hacer(); }
     catch (e) {
       ultimo = e;
-      if (sinPermiso(e) || i === 3) break;
+      if (sinPermiso(e) || (e && e.codigo === 'SESION') || i === 3) break;
       await esperar(REINTENTO_BASE_MS * i);
     }
   }
@@ -279,6 +285,7 @@ async function intentarPin() {
     return;
   }
   if (!res) { renderPinGate('PIN incorrecto. Intenta de nuevo.'); return; }
+  SESION_PIN = pin;
   if (res.rol === 'organizador') {
     STATE.rol = 'organizador'; STATE.tab = 'resumen';
     document.getElementById('whoami').innerHTML = '<button onclick="cerrarSesion()">Organizador · salir</button>';
@@ -294,7 +301,14 @@ async function intentarPin() {
   }
 }
 
-function cerrarSesion() { invalidarSnapshot(); STATE = { tab: null, rol: null, team: null }; renderPinGate(); }
+function cerrarSesion() { invalidarSnapshot(); SESION_PIN = null; STATE = { tab: null, rol: null, team: null }; renderPinGate(); }
+
+// Si el servidor dice que el PIN ya no sirve (por ejemplo, el organizador le generó un PIN nuevo al equipo),
+// se cierra la sesión y se vuelve a la pantalla del PIN con un mensaje claro.
+function sesionVencida() {
+  invalidarSnapshot(); SESION_PIN = null; STATE = { tab: null, rol: null, team: null };
+  renderPinGate('Tu sesión ya no es válida (puede que tu PIN haya cambiado). Vuelve a entrar con tu PIN.');
+}
 
 // ================= ORGANIZADOR =================
 async function renderOrg() {
