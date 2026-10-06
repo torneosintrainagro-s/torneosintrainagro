@@ -608,6 +608,7 @@ function orgPartidoCardHtml(m, nombreDe) {
       <div style="font-weight:600">${esc(m.nombre)}</div>
       <div class="muted">${esc(nombreDe[m.equipoA])} vs ${esc(nombreDe[m.equipoB])}${m.fecha?' · '+fmtFechaPartido(m.fecha):''}${m.hora?' · '+esc(m.hora):''}</div>
       ${m.cancha?`<div class="muted">📍 ${esc(m.cancha)}</div>`:''}
+      ${m.arbitroNombre?`<div class="muted">🧑‍⚖️ ${esc(m.arbitroNombre)}</div>`:''}
       ${m.observaciones?`<div class="muted" style="color:#B8860B;margin-top:4px">⚠ ${esc(m.observaciones)}</div>`:''}
     </div>
     <button class="btn-ghost" style="margin-top:8px" onclick="event.stopPropagation(); editarPartidoForm('${m.id}')">Editar día / hora / cancha</button>
@@ -771,6 +772,7 @@ async function verPartido(matchId) {
       <div class="bebas" style="font-size:32px;color:#123626">${esc(m.golesA)} - ${esc(m.golesB)}</div>
       <div style="flex:1;text-align:left;font-weight:600">${esc(teamB.nombre)}</div>
     </div>`;
+    if (m.arbitroNombre) resultadoHtml += `<div class="muted" style="margin-top:6px">Árbitro: ${esc(m.arbitroNombre)}</div>`;
   } else {
     resultadoHtml += '<p class="muted">El árbitro aún no registra el resultado.</p>';
   }
@@ -861,6 +863,7 @@ function tarjetasListaHtml(tarjetas) {
   return ordenadas.map(t => {
     const color = t.tipo === 'roja' ? {c:'#B3261E', bg:'#FBEAE9', label:'Roja'} : {c:'#7A4E00', bg:'#FDECC8', label:'Amarilla'};
     const pagada = t.pagada === true || String(t.pagada).toUpperCase() === 'TRUE';
+    const tieneSancion = t.jornadasSancion !== '' && t.jornadasSancion !== undefined && t.jornadasSancion !== null;
     return `<div class="card">
       <div class="row" style="align-items:center">
         <span class="badge" style="color:${color.c};background:${color.bg}">${color.label}</span>
@@ -870,7 +873,11 @@ function tarjetasListaHtml(tarjetas) {
         </div>
       </div>
       ${t.observaciones ? `<div style="margin-top:6px;font-size:14px">${esc(t.observaciones)}</div>` : ''}
-      ${t.tipo === 'roja' && t.jornadasSancion ? `<div style="margin-top:6px;font-size:13px;color:#B3261E">Suspensión: ${esc(t.jornadasSancion)} fecha${Number(t.jornadasSancion)===1?'':'s'} desde la fecha ${esc(t.jornada||'—')}</div>` : ''}
+      ${tieneSancion ? `<div style="margin-top:6px;font-size:13px;color:#B3261E">Suspensión: ${esc(t.jornadasSancion)} fecha${Number(t.jornadasSancion)===1?'':'s'} desde la fecha ${esc(t.jornada||'—')}</div>` : ''}
+      ${t.tipo === 'roja' ? `<div class="row" style="margin-top:8px;align-items:center;gap:6px">
+        <input type="number" min="0" id="sancion_${t.id}" placeholder="Fechas de suspensión" value="${tieneSancion?esc(t.jornadasSancion):''}" style="flex:1;margin:0">
+        <button class="btn-ghost" onclick="orgGuardarSancion('${t.id}')">${tieneSancion?'Actualizar':'Fijar sanción'}</button>
+      </div>` : ''}
       <div class="row" style="margin-top:10px;align-items:center;gap:8px">
         ${pagada
           ? `<span class="badge" style="color:#2E7D46;background:#E3F3E8">Pagada</span><button class="btn-ghost" onclick="orgEliminarTarjeta('${t.id}')">Eliminar</button>`
@@ -885,6 +892,17 @@ function orgTarjetasFiltrar() {
   const { tarjetas } = window.__tarjetasData;
   const filtradas = equipoId ? tarjetas.filter(t => String(t.equipoId) === String(equipoId)) : tarjetas;
   document.getElementById('tarj_lista').innerHTML = tarjetasListaHtml(filtradas);
+}
+
+async function orgGuardarSancion(id) {
+  const valor = document.getElementById('sancion_' + id).value;
+  if (valor === '') { alert('Escribe cuántas fechas de suspensión lleva.'); return; }
+  try {
+    await gsCall('fijarSancionTarjeta', id, Number(valor));
+    renderOrg();
+  } catch (e) {
+    alert(e && e.message ? e.message : 'No se pudo guardar la sanción.');
+  }
 }
 
 async function orgPagarTarjeta(id) {
@@ -1022,6 +1040,7 @@ async function verPartidoDelegado(matchId) {
       <div class="bebas" style="font-size:32px;color:#123626">${esc(m.golesA)} - ${esc(m.golesB)}</div>
       <div style="flex:1;text-align:left;font-weight:600">${esc(teamB.nombre)}</div>
     </div>`;
+    if (m.arbitroNombre) resultadoHtml += `<div class="muted" style="margin-top:6px">Árbitro: ${esc(m.arbitroNombre)}</div>`;
   } else {
     resultadoHtml += '<p class="muted">El árbitro aún no registra el resultado de este partido.</p>';
   }
@@ -1064,12 +1083,13 @@ async function verPartidoDelegado(matchId) {
 
 function planillaFilaHtml(p) {
   const autorizado = p.autorizado === true || String(p.autorizado).toUpperCase() === 'TRUE';
+  const activo = p.activo !== false;
   const st = STATUS[p.estado] || STATUS.habilitado;
-  return `<div class="card" style="padding:0" id="fila_${p.id}">
+  return `<div class="card" style="padding:0${activo?'':';opacity:0.55'}" id="fila_${p.id}">
     <div class="row" style="padding:12px;cursor:pointer" onclick="planillaToggle('${p.id}')">
       <div class="photo ${p.fotoUrl?'clickable':''}" style="width:56px;height:56px" ${p.fotoUrl?`onclick="event.stopPropagation(); verFoto('${esc(p.fotoUrl)}')"`:''}>${p.fotoUrl?`<img src="${esc(p.fotoUrl)}">`:''}</div>
       <div style="flex:1;min-width:0">
-        <div style="font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">#${esc(p.numero)} ${esc(p.nombre)}</div>
+        <div style="font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">#${esc(p.numero)} ${esc(p.nombre)}${activo?'':' · Deshabilitado'}</div>
         <div class="muted">${esc(p.posicion)} · ${st.label}</div>
       </div>
       <div id="flecha_${p.id}" class="muted" style="font-size:18px">▾</div>
@@ -1081,12 +1101,22 @@ function planillaFilaHtml(p) {
         ${p.refuerzo ? '<span class="badge" style="color:#0B5FA5;background:#E3EEFB">Refuerzo</span>' : ''}
         ${autorizado ? '<span class="badge" style="color:#2E7D46;background:#E3F3E8">Autorizado</span>' : '<span class="badge" style="color:#B8860B;background:#FBF3DC">Pendiente de autorización</span>'}
       </div>
-      <div class="row" style="gap:8px">
+      <div class="row" style="gap:8px;flex-wrap:wrap">
         <button class="btn-ghost" onclick="event.stopPropagation(); editPlayer('${p.id}')">Editar</button>
+        <button class="btn-ghost" onclick="event.stopPropagation(); toggleActivoJugador('${p.id}', ${activo})">${activo?'Deshabilitar':'Habilitar'}</button>
         <button class="btn-ghost" style="color:#B3261E" onclick="event.stopPropagation(); removePlayer('${p.id}')">Eliminar</button>
       </div>
     </div>
   </div>`;
+}
+
+async function toggleActivoJugador(id, estabaActivo) {
+  try {
+    await gsCall('cambiarActivoJugador', id, !estabaActivo);
+    renderDelegate();
+  } catch (e) {
+    alert(e && e.message ? e.message : 'No se pudo cambiar el estado del jugador.');
+  }
 }
 
 function planillaToggle(id) {
@@ -1099,12 +1129,19 @@ function planillaToggle(id) {
 
 async function planillaHtml() {
   const players = await gsCall('getJugadores', STATE.team.id);
-  let html = `<h2 class="bebas">Planilla y carnet — ${esc(STATE.team.nombre)}</h2><p class="sub">${players.length} jugador${players.length===1?'':'es'} · Delegado: ${esc(STATE.team.delegado)||'—'} · DT: ${esc(STATE.team.dt)||'—'}</p>`;
-  html += '<p class="muted" style="margin-top:-8px">Toca un jugador para ver su carnet completo.</p>';
-  players.forEach(p => {
-    html += planillaFilaHtml(p);
-  });
-  html += `<button class="btn-add" id="addPlayerBtn" onclick="showPlayerForm()">+ Agregar jugador</button>
+  const estaActivo = p => p.activo !== false;
+  const activos = players.filter(estaActivo);
+  const deshabilitados = players.filter(p => !estaActivo(p));
+  const cupoLleno = activos.length >= 22;
+  let html = `<h2 class="bebas">Planilla y carnet — ${esc(STATE.team.nombre)}</h2><p class="sub">${activos.length}/22 jugadores habilitados · Delegado: ${esc(STATE.team.delegado)||'—'} · DT: ${esc(STATE.team.dt)||'—'}</p>`;
+  html += '<p class="muted" style="margin-top:-8px">Toca un jugador para ver su carnet completo. El cupo de 22 incluye al DT y al Delegado si los registras como jugadores (sugerencia: usa los números 21 y 22 para ellos).</p>';
+  if (cupoLleno) html += '<p class="muted" style="color:#B8860B">Ya están los 22 habilitados. Para agregar uno nuevo, primero deshabilita a otro.</p>';
+  activos.forEach(p => { html += planillaFilaHtml(p); });
+  if (deshabilitados.length > 0) {
+    html += `<p class="muted" style="margin:14px 0 4px">Deshabilitados (${deshabilitados.length})</p>`;
+    deshabilitados.forEach(p => { html += planillaFilaHtml(p); });
+  }
+  html += `<button class="btn-add" id="addPlayerBtn" onclick="showPlayerForm()" ${cupoLleno?'disabled':''}>+ Agregar jugador</button>
   <div class="card" id="playerForm" style="display:none">
     <div class="row" style="margin-bottom:10px; flex-wrap:wrap; gap:8px">
       <div class="photo" id="photoPreview" style="width:64px;height:64px"></div>
@@ -1195,7 +1232,8 @@ async function alineacionRender(content) {
   content.innerHTML = `<h2 class="bebas">Alineación — ${esc(STATE.team.nombre)}</h2><p class="sub">Elige titulares y suplentes de tu plantilla</p>
     <select id="al_match" onchange="alineacionCargar()"><option value="">Elige un partido…</option>${matches.map(m=>`<option value="${m.id}">${esc(m.nombre)} · vs ${esc(rivalDe(m)||'—')}${m.fecha?' · '+fmtFechaPartido(m.fecha):''}${m.hora?' '+esc(m.hora):''}${m.cancha?' · '+esc(m.cancha):''}</option>`).join('')}</select>
     <div id="al_body"></div>`;
-  window.__alPlayers = players;
+  // Solo los jugadores habilitados (dentro del cupo de 22) se pueden alinear.
+  window.__alPlayers = players.filter(p => p.activo !== false);
   window.__alMatches = matches;
 }
 let alTitulares = [], alSuplentes = [];
@@ -1420,7 +1458,13 @@ async function arbitroRedibujar() {
   // Una vez guardado (o finalizado), el resultado y los goles quedan bloqueados y ya no se reactivan solos.
   const bloqueado = tieneResultado || finalizado;
 
+  const nombreArbitroGuardado = m.arbitroNombre || '';
   let html = `<p class="muted" style="margin-top:-4px">${esc(m.nombre)}${m.fecha?' · '+fmtFechaPartido(m.fecha):''}${m.hora?' '+esc(m.hora):''}</p>`;
+
+  html += `<div class="card">
+    <div class="muted" style="margin-bottom:8px">Nombre del árbitro</div>
+    <input type="text" id="ar_nombre_arbitro" value="${esc(nombreArbitroGuardado)}" ${bloqueado?'disabled':''} placeholder="Quién está calificando este partido" style="width:100%">
+  </div>`;
 
   if (finalizado) {
     html += `<div class="card" style="text-align:center;background:#E3F3E8">
@@ -1444,12 +1488,12 @@ async function arbitroRedibujar() {
   <div class="card">
     <div class="muted" style="margin-bottom:8px">Goles por jugador</div>
     <div style="font-weight:600;font-size:13px;margin-bottom:4px">${esc(teamA.nombre)}</div>
-    ${playersA.map(p => `<div class="row" style="align-items:center;margin-bottom:6px">
+    ${playersA.filter(p => p.activo !== false).map(p => `<div class="row" style="align-items:center;margin-bottom:6px">
       <div style="flex:1;font-size:14px">#${esc(p.numero)} ${esc(p.nombre)}</div>
       <input type="number" min="0" id="gol_${p.id}" value="${golDe[p.id]||''}" placeholder="0" ${bloqueado?'disabled':''} style="width:60px;text-align:center;margin:0">
     </div>`).join('')}
     <div style="font-weight:600;font-size:13px;margin:10px 0 4px">${esc(teamB.nombre)}</div>
-    ${playersB.map(p => `<div class="row" style="align-items:center;margin-bottom:6px">
+    ${playersB.filter(p => p.activo !== false).map(p => `<div class="row" style="align-items:center;margin-bottom:6px">
       <div style="flex:1;font-size:14px">#${esc(p.numero)} ${esc(p.nombre)}</div>
       <input type="number" min="0" id="gol_${p.id}" value="${golDe[p.id]||''}" placeholder="0" ${bloqueado?'disabled':''} style="width:60px;text-align:center;margin:0">
     </div>`).join('')}
@@ -1467,14 +1511,12 @@ async function arbitroRedibujar() {
       <div class="muted" style="margin:4px 0 6px">Jugador</div>
       <input type="hidden" id="ar_jugador" value="">
       <div id="ar_jugador_lista" class="muted" style="margin-bottom:10px">Elige primero el equipo…</div>
-      <select id="ar_tipo" onchange="arbitroToggleSancion()">
+      <select id="ar_tipo">
         <option value="amarilla">Tarjeta amarilla</option>
         <option value="roja">Tarjeta roja</option>
       </select>
-      <div id="ar_sancion_wrap" style="display:none">
-        <input type="number" min="1" id="ar_sancion" placeholder="¿Cuántas fechas de suspensión?">
-      </div>
-      <textarea id="ar_obs" rows="3" placeholder="Observaciones (motivo, detalle de la sanción, etc.)" style="width:100%;padding:12px;border-radius:8px;border:1px solid #d8ded8;font-family:inherit;font-size:16px;margin-bottom:8px"></textarea>
+      <p class="muted" style="margin:4px 0 6px;font-size:13px">Si es roja, el organizador decide después cuántas fechas de suspensión lleva.</p>
+      <textarea id="ar_obs" rows="3" placeholder="Observaciones (motivo, detalle de la falta, etc.)" style="width:100%;padding:12px;border-radius:8px;border:1px solid #d8ded8;font-family:inherit;font-size:16px;margin-bottom:8px"></textarea>
       <button class="btn-primary" id="ar_btn_tarjeta" onclick="arbitroRegistrar()">Registrar tarjeta</button>
     </div>`;
   }
@@ -1510,11 +1552,6 @@ async function arbitroFinalizarPartido() {
   }
 }
 
-function arbitroToggleSancion() {
-  const tipo = document.getElementById('ar_tipo').value;
-  document.getElementById('ar_sancion_wrap').style.display = tipo === 'roja' ? 'block' : 'none';
-}
-
 // Guarda el resultado del partido Y los goles por jugador en un solo paso.
 // Al terminar bien, el botón queda bloqueado diciendo "✓ Guardado" y no se vuelve a activar solo:
 // para corregir algo hay que volver a elegir el partido (eso refresca todo el panel).
@@ -1524,6 +1561,8 @@ async function arbitroGuardarTodo() {
   const m = window.__arMatch;
   const golesA = document.getElementById('ar_golesA').value;
   const golesB = document.getElementById('ar_golesB').value;
+  const nombreArbitro = document.getElementById('ar_nombre_arbitro').value.trim();
+  if (!nombreArbitro) { alert('Escribe el nombre del árbitro antes de guardar.'); return; }
   if (golesA === '' || golesB === '') { alert('Completa el marcador de ambos equipos.'); return; }
 
   const teamA = window.__arTeams.a, teamB = window.__arTeams.b;
@@ -1544,8 +1583,9 @@ async function arbitroGuardarTodo() {
   btn.textContent = 'Guardando…';
   let resultadoGuardado = false;
   try {
-    await gsCall('guardarResultado', m.id, Number(golesA), Number(golesB));
+    await gsCall('guardarResultado', m.id, Number(golesA), Number(golesB), nombreArbitro);
     resultadoGuardado = true;
+    window.__arMatch.arbitroNombre = nombreArbitro;
     // Muy importante: actualizar la copia local del partido. Si no se hace esto, al registrar
     // una tarjeta después, el panel se vuelve a dibujar creyendo que el resultado seguía sin guardar
     // y reaparecían habilitados el marcador y los goles.
@@ -1555,6 +1595,7 @@ async function arbitroGuardarTodo() {
     btn.textContent = '✓ Guardado';
     document.getElementById('ar_golesA').disabled = true;
     document.getElementById('ar_golesB').disabled = true;
+    document.getElementById('ar_nombre_arbitro').disabled = true;
     [...playersA, ...playersB].forEach(p => { const el = document.getElementById('gol_' + p.id); if (el) el.disabled = true; });
   } catch (e) {
     btn.disabled = false;
@@ -1574,7 +1615,7 @@ async function arbitroCargarJugadores() {
   lista.className = 'muted'; lista.innerHTML = 'Cargando…';
   let players;
   try {
-    players = await gsCall('getJugadores', equipoId);
+    players = (await gsCall('getJugadores', equipoId)).filter(p => p.activo !== false);
   } catch (e) {
     lista.className = 'muted';
     lista.innerHTML = 'No se pudo cargar la lista. (Detalle: ' + esc((e && e.message) || e) + ')' +
@@ -1608,9 +1649,7 @@ async function arbitroRegistrar() {
   const jugadorId = document.getElementById('ar_jugador').value;
   const tipo = document.getElementById('ar_tipo').value;
   const obs = document.getElementById('ar_obs').value.trim();
-  const sancion = document.getElementById('ar_sancion').value;
   if (!equipoId || !jugadorId) return;
-  if (tipo === 'roja' && !sancion) { alert('Indica cuántas fechas de suspensión lleva la tarjeta roja.'); return; }
   btn.disabled = true;
   const textoOriginal = btn.textContent;
   btn.textContent = 'Guardando…';
@@ -1618,7 +1657,7 @@ async function arbitroRegistrar() {
     const team = (teams.a.id === equipoId) ? teams.a : teams.b;
     const players = await gsCall('getJugadores', equipoId);
     const jugador = players.find(p => p.id === jugadorId);
-    await gsCall('addTarjeta', m.id, equipoId, jugadorId, tipo, obs, team.nombre, jugador ? jugador.nombre : '', m.nombre, m.jornada, sancion ? Number(sancion) : 0);
+    await gsCall('addTarjeta', m.id, equipoId, jugadorId, tipo, obs, team.nombre, jugador ? jugador.nombre : '', m.nombre, m.jornada, 0);
     await arbitroRedibujar();   // redibuja todo el panel: el botón vuelve a nacer normal, listo para la siguiente tarjeta
   } catch (e) {
     btn.disabled = false;
