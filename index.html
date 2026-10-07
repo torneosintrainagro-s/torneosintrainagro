@@ -1227,6 +1227,7 @@ async function editPlayer(id) {
   const players = await gsCall('getJugadores', STATE.team.id);
   const p = players.find(x => x.id === id);
   editingId = id; currentPhoto = null;
+  window.__jugadorEditando = p;   // se guarda para avisar si se cambian datos de un jugador ya autorizado
   document.getElementById('p_nombre').value = p.nombre;
   document.getElementById('p_doc').value = p.docId;
   document.getElementById('p_nac').value = p.nacimiento;
@@ -1259,10 +1260,19 @@ async function savePlayer() {
     cuarenton: document.getElementById('p_cuarenton').checked,
     refuerzo: document.getElementById('p_refuerzo').checked
   };
+  // Aviso ANTES de guardar: si el jugador ya está autorizado y se le cambia el nombre, la cédula o la foto,
+  // vuelve a quedar pendiente de autorización (el servidor lo aplica de todas formas).
+  const original = esNuevo ? null : window.__jugadorEditando;
+  if (original && (original.autorizado === true || String(original.autorizado).toUpperCase() === 'TRUE')) {
+    const norm = v => String(v == null ? '' : v).trim().replace(/\s+/g, ' ').toLowerCase();
+    const cambia = norm(original.nombre) !== norm(jugador.nombre) || norm(original.docId) !== norm(jugador.docId) || !!currentPhoto;
+    if (cambia && !confirm('Este jugador ya está autorizado.\n\nSi le cambias el nombre, la cédula o la foto, vuelve a quedar "Pendiente de autorización" y no podrás alinearlo hasta que el organizador lo autorice de nuevo.\n\n¿Guardar de todas formas?')) return;
+  }
   try {
-    await gsCall('guardarJugador', STATE.team.id, jugador, currentPhoto, STATE.team.nombre);
+    const r = await gsCall('guardarJugador', STATE.team.id, jugador, currentPhoto, STATE.team.nombre);
     renderDelegate();
     if (esNuevo) alert('Jugador guardado. Queda "Pendiente de autorización" hasta que el organizador lo autorice — solo entonces podrás alinearlo en un partido.');
+    else if (r && r.volvioARevision) alert('Cambios guardados. El jugador quedó "Pendiente de autorización" hasta que el organizador lo revise de nuevo.');
   } catch (e) {
     document.getElementById('p_error').innerText = (e && e.message) ? e.message : 'No se pudo guardar.';
   }
