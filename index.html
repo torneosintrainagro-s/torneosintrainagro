@@ -1503,6 +1503,26 @@ async function arbitroCargarPartido() {
   await arbitroRedibujar();
 }
 
+// Bloque de goles de UN equipo en el panel del árbitro: el nombre del equipo va grande, en una franja de color,
+// y los jugadores quedan dentro de un recuadro con el mismo color. Local en verde, visitante en azul,
+// para que al bajar se note claramente cuándo se pasa de un equipo al otro.
+function bloqueGolesEquipo(team, players, etiqueta, color, fondo, golDe, bloqueado) {
+  const activos = players.filter(p => p.activo !== false);
+  return `<div style="border:2px solid ${color};border-radius:12px;overflow:hidden;margin:12px 0;background:${fondo}">
+    <div style="background:${color};color:#fff;padding:10px 14px">
+      <div style="font-size:12px;font-weight:600;letter-spacing:.08em;opacity:.85">${etiqueta} · ${activos.length} jugador${activos.length===1?'':'es'}</div>
+      <div class="bebas" style="font-size:30px;line-height:1.05">${esc(team.nombre)}</div>
+    </div>
+    <div style="padding:10px 12px 4px">
+      ${activos.length === 0 ? '<p class="muted" style="margin:0 0 8px">Este equipo no tiene jugadores habilitados.</p>' : ''}
+      ${activos.map(p => `<div class="row" style="align-items:center;margin-bottom:6px">
+        <div style="flex:1;font-size:14px">#${esc(p.numero)} ${esc(p.nombre)}</div>
+        <input type="number" min="0" id="gol_${p.id}" value="${golDe[p.id]||''}" placeholder="0" ${bloqueado?'disabled':''} style="width:60px;text-align:center;margin:0;background:#fff">
+      </div>`).join('')}
+    </div>
+  </div>`;
+}
+
 async function arbitroRedibujar() {
   const m = window.__arMatch, teamA = window.__arTeams.a, teamB = window.__arTeams.b;
   const body = document.getElementById('ar_body');
@@ -1546,16 +1566,8 @@ async function arbitroRedibujar() {
 
   <div class="card">
     <div class="muted" style="margin-bottom:8px">Goles por jugador</div>
-    <div style="font-weight:600;font-size:13px;margin-bottom:4px">${esc(teamA.nombre)}</div>
-    ${playersA.filter(p => p.activo !== false).map(p => `<div class="row" style="align-items:center;margin-bottom:6px">
-      <div style="flex:1;font-size:14px">#${esc(p.numero)} ${esc(p.nombre)}</div>
-      <input type="number" min="0" id="gol_${p.id}" value="${golDe[p.id]||''}" placeholder="0" ${bloqueado?'disabled':''} style="width:60px;text-align:center;margin:0">
-    </div>`).join('')}
-    <div style="font-weight:600;font-size:13px;margin:10px 0 4px">${esc(teamB.nombre)}</div>
-    ${playersB.filter(p => p.activo !== false).map(p => `<div class="row" style="align-items:center;margin-bottom:6px">
-      <div style="flex:1;font-size:14px">#${esc(p.numero)} ${esc(p.nombre)}</div>
-      <input type="number" min="0" id="gol_${p.id}" value="${golDe[p.id]||''}" placeholder="0" ${bloqueado?'disabled':''} style="width:60px;text-align:center;margin:0">
-    </div>`).join('')}
+    ${bloqueGolesEquipo(teamA, playersA, 'LOCAL', '#123626', '#EEF3ED', golDe, bloqueado)}
+    ${bloqueGolesEquipo(teamB, playersB, 'VISITANTE', '#0B5FA5', '#EAF2FB', golDe, bloqueado)}
     ${finalizado ? '' : `<button class="btn-primary" id="ar_btn_todo" style="margin-top:6px;width:100%" ${tieneResultado?'disabled':''} onclick="arbitroGuardarTodo()">${tieneResultado?"✓ Guardado":"Guardar goles y resultado"}</button>`}
   </div>`;
 
