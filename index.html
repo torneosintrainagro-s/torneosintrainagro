@@ -252,6 +252,16 @@ function resizeImage(file, maxSize=220, quality=0.6){
 const app = document.getElementById('app');
 let STATE = { tab: null, rol: null, team: null };
 
+// ===================== SESIÓN GUARDADA =====================
+// El PIN queda guardado en este celular/computador para no tener que escribirlo cada vez.
+// Solo se borra al tocar "salir" (o si el PIN deja de servir, por ejemplo si el organizador lo cambió).
+// La clave lleva la dirección del servidor para que el Torneo A y el Torneo B no se mezclen
+// (las dos páginas viven en el mismo sitio de GitHub y comparten este almacenamiento).
+const CLAVE_PIN_GUARDADO = 'pinGuardado:' + API_URL;
+function leerPinGuardado() { try { return localStorage.getItem(CLAVE_PIN_GUARDADO) || ''; } catch (e) { return ''; } }
+function guardarPin(pin) { try { localStorage.setItem(CLAVE_PIN_GUARDADO, pin); } catch (e) {} }
+function olvidarPin() { try { localStorage.removeItem(CLAVE_PIN_GUARDADO); } catch (e) {} }
+
 function renderPinGate(errorMsg, pinPrevio) {
   document.getElementById('whoami').innerHTML = '';
   app.innerHTML = `<div style="padding-top:24px">
@@ -286,6 +296,12 @@ async function intentarPin() {
   }
   if (!res) { renderPinGate('PIN incorrecto. Intenta de nuevo.'); return; }
   SESION_PIN = pin;
+  guardarPin(pin);
+  abrirPanel(res);
+}
+
+// Abre el panel que corresponde al PIN (organizador, árbitro o equipo).
+function abrirPanel(res) {
   if (res.rol === 'organizador') {
     STATE.rol = 'organizador'; STATE.tab = 'resumen';
     document.getElementById('whoami').innerHTML = '<button onclick="cerrarSesion()">Organizador · salir</button>';
@@ -301,13 +317,32 @@ async function intentarPin() {
   }
 }
 
-function cerrarSesion() { invalidarSnapshot(); SESION_PIN = null; STATE = { tab: null, rol: null, team: null }; renderPinGate(); }
+function cerrarSesion() { invalidarSnapshot(); SESION_PIN = null; olvidarPin(); STATE = { tab: null, rol: null, team: null }; renderPinGate(); }
 
 // Si el servidor dice que el PIN ya no sirve (por ejemplo, el organizador le generó un PIN nuevo al equipo),
 // se cierra la sesión y se vuelve a la pantalla del PIN con un mensaje claro.
 function sesionVencida() {
-  invalidarSnapshot(); SESION_PIN = null; STATE = { tab: null, rol: null, team: null };
+  invalidarSnapshot(); SESION_PIN = null; olvidarPin(); STATE = { tab: null, rol: null, team: null };
   renderPinGate('Tu sesión ya no es válida (puede que tu PIN haya cambiado). Vuelve a entrar con tu PIN.');
+}
+
+// Al abrir la app: si hay un PIN guardado en este dispositivo, entra solo al panel de ese PIN.
+async function entrarAutomatico() {
+  const pin = leerPinGuardado();
+  if (!pin) { renderPinGate(); return; }
+  document.getElementById('whoami').innerHTML = '';
+  app.innerHTML = '<div style="padding-top:60px;text-align:center"><p class="muted">Entrando…</p></div>';
+  let res;
+  try {
+    res = await iniciarSesionApi(pin);
+  } catch (e) {
+    // Sin internet o servidor ocupado: se deja el PIN escrito para que solo toque "Entrar" (y se conserva guardado).
+    renderPinGate('No se pudo conectar. Revisa tu internet y toca Entrar. (Detalle: ' + ((e && e.message) || e) + ')', pin);
+    return;
+  }
+  if (!res) { olvidarPin(); renderPinGate('Tu PIN cambió o ya no es válido. Ingresa el PIN nuevo.'); return; }
+  SESION_PIN = pin;
+  abrirPanel(res);
 }
 
 // ================= ORGANIZADOR =================
@@ -1699,7 +1734,7 @@ function tarjetaCardHtml(t, nombreEquipoDe, nombreJugadorDe) {
   </div>`;
 }
 
-renderPinGate();
+entrarAutomatico();
 </script>
 </body>
 </html>
