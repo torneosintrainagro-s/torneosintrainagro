@@ -54,8 +54,9 @@
   .toggle.on-s { background:#3F7D58; color:#fff; }
   .muted { color:#8a978d; font-size:15px; }
   .pin-input { letter-spacing:6px; font-size:26px; text-align:center; font-family:'Bebas Neue',sans-serif; }
-  /* Todo lo que se escribe se ve (y se guarda) en MAYÚSCULA SOSTENIDA */
-  input[type="text"], input:not([type]), textarea { text-transform:uppercase; }
+  /* TODA la app en MAYÚSCULA SOSTENIDA: textos, botones, menús, pestañas y lo que se escribe */
+  body, button, select, option, input, textarea, label { text-transform:uppercase; }
+  ::placeholder { text-transform:uppercase; }
   .lbl { display:block; font-size:13px; font-weight:600; color:#3b4a42; margin:6px 0 4px; }
   .lbl .req { color:#B3261E; }
 </style>
@@ -256,6 +257,23 @@ function resizeImage(file, maxSize=220, quality=0.6){
 const app = document.getElementById('app');
 let STATE = { tab: null, rol: null, team: null };
 
+// ===================== TODO EN MAYÚSCULA =====================
+// El CSS ya pone en mayúscula lo que se ve en pantalla. Esto cubre lo que el CSS no alcanza:
+//  - Las listas desplegables que abre el celular (Android/iPhone las dibujan aparte).
+//  - Los avisos (alert) y las preguntas de confirmación (confirm).
+function opcionesEnMayuscula(raiz) {
+  (raiz || document).querySelectorAll('option').forEach(o => {
+    const t = o.textContent, u = t.toUpperCase();
+    if (t !== u) o.textContent = u;   // solo cambia el texto que se ve; el valor guardado no se toca
+  });
+}
+try { new MutationObserver(() => opcionesEnMayuscula()).observe(document.body, { childList: true, subtree: true }); } catch (e) {}
+(function () {
+  const _alert = window.alert.bind(window), _confirm = window.confirm.bind(window);
+  window.alert = m => _alert(String(m == null ? '' : m).toUpperCase());
+  window.confirm = m => _confirm(String(m == null ? '' : m).toUpperCase());
+})();
+
 // ===================== SESIÓN GUARDADA =====================
 // El PIN queda guardado en este celular/computador para no tener que escribirlo cada vez.
 // Solo se borra al tocar "salir" (o si el PIN deja de servir, por ejemplo si el organizador lo cambió).
@@ -367,9 +385,22 @@ function tabBarHtml(tabs, active, renderFn) {
   ).join('') + '</div>';
 }
 
+// Hace que todo lo que se escriba en el PDF (títulos y tablas) salga en mayúscula.
+function pdfEnMayuscula(doc) {
+  const M = x => (typeof x === 'string' ? x.toUpperCase() : (typeof x === 'number' ? x : String(x == null ? '' : x).toUpperCase()));
+  const _text = doc.text.bind(doc);
+  doc.text = (t, ...resto) => _text(Array.isArray(t) ? t.map(M) : M(t), ...resto);
+  const _tabla = doc.autoTable.bind(doc);
+  doc.autoTable = (o) => _tabla(Object.assign({}, o, {
+    head: o.head ? o.head.map(f => f.map(M)) : o.head,
+    body: o.body ? o.body.map(f => f.map(M)) : o.body
+  }));
+  return doc;
+}
+
 function descargarTablaPDF(titulo, headers, rows, filename) {
   const { jsPDF } = window.jspdf;
-  const doc = new jsPDF();
+  const doc = pdfEnMayuscula(new jsPDF());
   doc.setFontSize(14);
   doc.text(titulo, 14, 15);
   doc.autoTable({ head: [headers], body: rows, startY: 20, styles: { fontSize: 9 }, headStyles: { fillColor: [18, 54, 38] } });
@@ -379,7 +410,7 @@ function descargarTablaPDF(titulo, headers, rows, filename) {
 // Un solo PDF con las tres tablas del resumen, una debajo de la otra.
 function descargarResumenPDF() {
   const { jsPDF } = window.jspdf;
-  const doc = new jsPDF();
+  const doc = pdfEnMayuscula(new jsPDF());
   const r = window.__resumen;
   let y = 15;
 
