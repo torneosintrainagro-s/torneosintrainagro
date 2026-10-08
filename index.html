@@ -54,6 +54,10 @@
   .toggle.on-s { background:#3F7D58; color:#fff; }
   .muted { color:#8a978d; font-size:15px; }
   .pin-input { letter-spacing:6px; font-size:26px; text-align:center; font-family:'Bebas Neue',sans-serif; }
+  /* Todo lo que se escribe se ve (y se guarda) en MAYÚSCULA SOSTENIDA */
+  input[type="text"], input:not([type]), textarea { text-transform:uppercase; }
+  .lbl { display:block; font-size:13px; font-weight:600; color:#3b4a42; margin:6px 0 4px; }
+  .lbl .req { color:#B3261E; }
 </style>
 </head>
 <body>
@@ -1197,15 +1201,25 @@ async function planillaHtml() {
       <label class="btn-ghost">Tomar foto<input type="file" accept="image/*" capture="environment" style="display:none" onchange="onPhotoChosen(this.files[0])"></label>
       <label class="btn-ghost">Subir archivo<input type="file" accept="image/*" style="display:none" onchange="onPhotoChosen(this.files[0])"></label>
     </div>
-    <input id="p_nombre" placeholder="Nombre completo">
-    <input id="p_doc" placeholder="Número de identificación (cédula)">
+    <p class="muted" style="font-size:13px;margin:0 0 6px">Los campos con <span style="color:#B3261E">*</span> son obligatorios.</p>
+    <label class="lbl" for="p_nombre">Nombres y apellidos completos <span class="req">*</span></label>
+    <input id="p_nombre" placeholder="EJ: JUAN CAMILO PEÑA LÓPEZ">
+    <label class="lbl" for="p_doc">Cédula (solo números, sin puntos) <span class="req">*</span></label>
+    <input id="p_doc" inputmode="numeric" placeholder="EJ: 1045678901">
+    <label class="lbl" for="p_nac">Fecha de nacimiento</label>
     <input id="p_nac" type="date">
-    <select id="p_rh"><option value="">RH / tipo de sangre…</option>${RH_TYPES.map(x=>`<option value="${x}">${x}</option>`).join('')}</select>
-    <input id="p_num" type="number" placeholder="Número de camiseta">
-    <select id="p_pos">${POSITIONS.map(x=>`<option>${x}</option>`).join('')}</select>
+    <label class="lbl" for="p_rh">Tipo de sangre (RH) <span class="req">*</span></label>
+    <select id="p_rh"><option value="">Elige el tipo de sangre…</option>${RH_TYPES.map(x=>`<option value="${x}">${x}</option>`).join('')}</select>
+    <label class="lbl" for="p_num">Número de camiseta (del 1 al 22) <span class="req">*</span></label>
+    <input id="p_num" type="number" min="1" max="22" inputmode="numeric" placeholder="Del 1 al 22">
+    <label class="lbl" for="p_pos">Posición <span class="req">*</span></label>
+    <select id="p_pos"><option value="">Elige la posición…</option>${POSITIONS.map(x=>`<option value="${x}">${x}</option>`).join('')}</select>
+    <label class="lbl" for="p_estado">Estado</label>
     <select id="p_estado">${Object.entries(STATUS).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join('')}</select>
-    <label class="chk"><input type="checkbox" id="p_cuarenton"> Jugador cuarentón (mayor de 40)</label>
-    <label class="chk"><input type="checkbox" id="p_refuerzo"> Jugador de refuerzo</label>
+    <label class="lbl" for="p_cuarenton">¿Es cuarentón (mayor de 40 años)? <span class="req">*</span></label>
+    <select id="p_cuarenton"><option value="">Elige…</option><option value="si">SÍ, es cuarentón</option><option value="no">NO</option></select>
+    <label class="lbl" for="p_refuerzo">¿Es jugador de refuerzo? <span class="req">*</span></label>
+    <select id="p_refuerzo"><option value="">Elige…</option><option value="si">SÍ, es refuerzo</option><option value="no">NO</option></select>
     <div id="p_error" style="color:#B3261E;font-size:13px;margin-bottom:8px"></div>
     <button class="btn-primary" onclick="savePlayer()">Guardar</button>
     <button class="btn-ghost" onclick="document.getElementById('playerForm').style.display='none'; document.getElementById('addPlayerBtn').style.display='block';">Cancelar</button>
@@ -1217,8 +1231,8 @@ let editingId = null, currentPhoto = null;
 function showPlayerForm() {
   editingId = null; currentPhoto = null;
   ['p_nombre','p_doc','p_num'].forEach(id => document.getElementById(id).value='');
-  document.getElementById('p_nac').value=''; document.getElementById('p_rh').value=''; document.getElementById('p_pos').selectedIndex=0;
-  document.getElementById('p_estado').value='habilitado'; document.getElementById('p_cuarenton').checked=false; document.getElementById('p_refuerzo').checked=false;
+  document.getElementById('p_nac').value=''; document.getElementById('p_rh').value=''; document.getElementById('p_pos').value='';
+  document.getElementById('p_estado').value='habilitado'; document.getElementById('p_cuarenton').value=''; document.getElementById('p_refuerzo').value='';
   document.getElementById('photoPreview').innerHTML=''; document.getElementById('p_error').innerText='';
   document.getElementById('playerForm').style.display='block';
   document.getElementById('addPlayerBtn').style.display='none';
@@ -1233,10 +1247,10 @@ async function editPlayer(id) {
   document.getElementById('p_nac').value = p.nacimiento;
   document.getElementById('p_rh').value = p.rh || '';
   document.getElementById('p_num').value = p.numero;
-  document.getElementById('p_pos').value = p.posicion;
+  document.getElementById('p_pos').value = POSITIONS.includes(p.posicion) ? p.posicion : '';
   document.getElementById('p_estado').value = p.estado;
-  document.getElementById('p_cuarenton').checked = !!p.cuarenton;
-  document.getElementById('p_refuerzo').checked = !!p.refuerzo;
+  document.getElementById('p_cuarenton').value = p.cuarenton ? 'si' : 'no';
+  document.getElementById('p_refuerzo').value = p.refuerzo ? 'si' : 'no';
   document.getElementById('photoPreview').innerHTML = p.fotoUrl ? `<img src="${esc(p.fotoUrl)}">` : '';
   document.getElementById('p_error').innerText = '';
   document.getElementById('playerForm').style.display = 'block';
@@ -1248,24 +1262,42 @@ async function onPhotoChosen(file) {
   document.getElementById('photoPreview').innerHTML = `<img src="${currentPhoto}">`;
 }
 async function savePlayer() {
-  const nombre = document.getElementById('p_nombre').value.trim();
-  const numero = document.getElementById('p_num').value;
-  if (!nombre || !numero) { document.getElementById('p_error').innerText = 'Nombre y número de camiseta son obligatorios.'; return; }
+  const nombre = document.getElementById('p_nombre').value.trim().replace(/\s+/g, ' ').toUpperCase();
+  const docId = document.getElementById('p_doc').value.replace(/[\s.,-]/g, '');
+  const numero = document.getElementById('p_num').value.trim();
+  const rh = document.getElementById('p_rh').value;
+  const posicion = document.getElementById('p_pos').value;
+  const cuarentonSel = document.getElementById('p_cuarenton').value;
+  const refuerzoSel = document.getElementById('p_refuerzo').value;
+  const errEl = document.getElementById('p_error');
+  // Revisión de los datos obligatorios ANTES de enviar, con un mensaje claro de lo que falta
+  const faltan = [];
+  if (!nombre) faltan.push('nombres y apellidos');
+  if (!docId) faltan.push('cédula');
+  if (!rh) faltan.push('tipo de sangre (RH)');
+  if (!numero) faltan.push('número de camiseta');
+  if (!posicion) faltan.push('posición');
+  if (!cuarentonSel) faltan.push('si es cuarentón');
+  if (!refuerzoSel) faltan.push('si es refuerzo');
+  if (faltan.length) { errEl.innerText = 'Falta llenar: ' + faltan.join(', ') + '.'; return; }
+  if (!/^\d{5,12}$/.test(docId)) { errEl.innerText = 'La cédula debe tener solo números, sin puntos ni letras.'; return; }
+  const n = Number(numero);
+  if (!Number.isInteger(n) || n < 1 || n > 22) { errEl.innerText = 'El número de camiseta debe ser del 1 al 22 (contando al DT y al Delegado). Coloca un número dentro de ese rango.'; return; }
+  errEl.innerText = '';
   const esNuevo = !editingId;
   const jugador = {
-    id: editingId, nombre, docId: document.getElementById('p_doc').value.trim(),
-    nacimiento: document.getElementById('p_nac').value, numero,
-    rh: document.getElementById('p_rh').value,
-    posicion: document.getElementById('p_pos').value, estado: document.getElementById('p_estado').value,
-    cuarenton: document.getElementById('p_cuarenton').checked,
-    refuerzo: document.getElementById('p_refuerzo').checked
+    id: editingId, nombre, docId,
+    nacimiento: document.getElementById('p_nac').value, numero: String(n),
+    rh, posicion, estado: document.getElementById('p_estado').value,
+    cuarenton: cuarentonSel === 'si',
+    refuerzo: refuerzoSel === 'si'
   };
   // Aviso ANTES de guardar: si el jugador ya está autorizado y se le cambia el nombre, la cédula o la foto,
   // vuelve a quedar pendiente de autorización (el servidor lo aplica de todas formas).
   const original = esNuevo ? null : window.__jugadorEditando;
   if (original && (original.autorizado === true || String(original.autorizado).toUpperCase() === 'TRUE')) {
     const norm = v => String(v == null ? '' : v).trim().replace(/\s+/g, ' ').toLowerCase();
-    const cambia = norm(original.nombre) !== norm(jugador.nombre) || norm(original.docId) !== norm(jugador.docId) || !!currentPhoto;
+    const cambia = norm(original.nombre) !== norm(jugador.nombre) || String(original.docId == null ? '' : original.docId).replace(/\D/g, '') !== String(jugador.docId).replace(/\D/g, '') || !!currentPhoto;
     if (cambia && !confirm('Este jugador ya está autorizado.\n\nSi le cambias el nombre, la cédula o la foto, vuelve a quedar "Pendiente de autorización" y no podrás alinearlo hasta que el organizador lo autorice de nuevo.\n\n¿Guardar de todas formas?')) return;
   }
   try {
