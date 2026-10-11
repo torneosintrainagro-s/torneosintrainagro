@@ -687,6 +687,7 @@ async function orgRevocarAutorizacion(id) {
 
 function orgPartidoCardHtml(m, nombreDe) {
   const tieneResultado = m.golesA !== '' && m.golesA !== undefined && m.golesA !== null;
+  const finalizado = m.finalizado === true || String(m.finalizado).toUpperCase() === 'TRUE';
   return `<div class="card">
     <div onclick="verPartido('${m.id}')" style="cursor:pointer">
       <div style="font-weight:600">${esc(m.nombre)}</div>
@@ -696,12 +697,27 @@ function orgPartidoCardHtml(m, nombreDe) {
       ${m.observaciones?`<div class="muted" style="color:#B8860B;margin-top:4px">⚠ ${esc(m.observaciones)}</div>`:''}
     </div>
     <button class="btn-ghost" style="margin-top:8px" onclick="event.stopPropagation(); editarPartidoForm('${m.id}')">Editar día / hora / cancha</button>
-    ${tieneResultado ? `<button class="btn-ghost" style="margin-top:6px;color:#B3261E" onclick="event.stopPropagation(); orgReiniciarResultado('${m.id}')">Reiniciar resultado (por error del árbitro)</button>` : ''}
+    ${finalizado ? `<div class="muted" style="margin-top:8px;color:#2E7D46">🔒 Cerrado por el árbitro</div>
+    <button class="btn-ghost" style="margin-top:6px" onclick="event.stopPropagation(); orgReabrirPartido('${m.id}')">🔓 Reabrir para que el árbitro corrija</button>` : ''}
+    ${(tieneResultado || finalizado) ? `<button class="btn-ghost" style="margin-top:6px;color:#B3261E" onclick="event.stopPropagation(); orgReiniciarResultado('${m.id}')">Reiniciar resultado (borra todo)</button>` : ''}
   </div>`;
 }
 
 // Solo para el organizador: deja un partido como si nunca se hubiera calificado, para corregir
 // un error del árbitro (por ejemplo, calificó un partido de ensayo por equivocación).
+// Solo para el organizador: vuelve a abrir un partido cerrado para que el árbitro corrija.
+// NO borra nada: el marcador, los goles y las tarjetas que ya estaban se conservan.
+async function orgReabrirPartido(matchId) {
+  if (!confirm('¿Reabrir este partido?\n\nEl árbitro podrá volver a escribir el marcador y los goles, y agregar tarjetas. Lo que ya estaba guardado NO se borra.')) return;
+  try {
+    await gsCall('reabrirPartido', matchId);
+    alert('Listo: el partido quedó abierto. El árbitro ya puede entrar, corregir y volver a finalizar.');
+    await renderOrg();
+  } catch (e) {
+    alert(e && e.message ? e.message : 'No se pudo reabrir el partido.');
+  }
+}
+
 async function orgReiniciarResultado(matchId) {
   if (!confirm('¿Reiniciar el resultado de este partido?\n\nEsto borra el marcador, los goles por jugador y las tarjetas que ya se habían registrado en este partido. El partido queda listo para calificarse de nuevo desde cero.')) return;
   try {
@@ -1578,14 +1594,43 @@ async function arbitroCargarPartido() {
   const body = document.getElementById('ar_body');
   if (!matchId) { body.innerHTML = ''; return; }
   body.innerHTML = '<p class="muted">Cargando…</p>';
-  const [matches, teams] = await Promise.all([gsCall('getPartidos'), gsCall('getEquipos')]);
-  const m = matches.find(x => x.id === matchId);
-  const teamA = teams.find(t => t.id === m.equipoA), teamB = teams.find(t => t.id === m.equipoB);
-  window.__arMatch = m; window.__arTeams = { a: teamA, b: teamB };
-  await arbitroRedibujar();
+  try {
+    invalidarSnapshot();   // datos frescos: por si el organizador acaba de reabrir el partido
+    const [matches, teams] = await Promise.all([gsCall('getPartidos'), gsCall('getEquipos')]);
+    const m = matches.find(x => x.id === matchId);
+    const teamA = teams.find(t => t.id === m.equipoA), teamB = teams.find(t => t.id === m.equipoB);
+    window.__arMatch = m; window.__arTeams = { a: teamA, b: teamB };
+    await arbitroRedibujar();
+  } catch (e) {
+    body.innerHTML = `<div class="card"><p class="muted" style="margin-top:0">No se pudo cargar el partido (${esc((e && e.message) || 'sin conexión')}).</p>
+      <button class="btn-ghost" onclick="arbitroCargarPartido()">Reintentar</button></div>`;
+  }
 }
 
-// Bloque de goles de UN equipo en el panel del árbitro: el nombre del equipo va grande, en una franja de color,
+// ================= PANEL DEL ÁRBITRO: UN SOLO GUARDADO =================
+// El árbitro llena todo (marcador, goleadores y tarjetas) y al final toca UN solo botón,
+// "GUARDAR Y FINALIZAR PARTIDO", que guarda todo junto y cierra el partido.
+// Mientras tanto no se envía nada: lo que escribe queda guardado EN EL CELULAR (borrador),
+// así no se pierde aunque se vaya el internet, se cierre la app o se recargue la página.
+function claveBorrador(matchId) { return 'borradorArbitro:' + API_URL + ':' + matchId; }
+function leerBorrador(matchId) { try { const t = localStorage.getItem(claveBorrador(matchId)); return t ? JSON.parse(t) : null; } catch (e) { return null; } }
+function guardarBorrador() { try { const b = window.__arBorrador; if (b) localStorage.setItem(claveBorrador(b.matchId), JSON.stringify(b)); } catch (e) {} }
+function borrarBorrador(matchId) { try { localStorage.removeItem(claveBorrador(matchId)); } catch (e) {} }
+function idTarjetaNueva() { return 't' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
+
+function arGol(jugadorId, valor) {
+  const b = window.__arBorrador; if (!b) return;
+  const n = Math.max(0, parseInt(valor, 10) || 0);
+  if (n > 0) b.goles[jugadorId] = n; else delete b.goles[jugadorId];
+  guardarBorrador();
+}
+function arCampo(campo, valor) {
+  const b = window.__arBorrador; if (!b) return;
+  b[campo] = valor;
+  guardarBorrador();
+}
+
+// Bloque de goles de UN equipo: el nombre del equipo va grande, en una franja de color,
 // y los jugadores quedan dentro de un recuadro con el mismo color. Local en verde, visitante en azul,
 // para que al bajar se note claramente cuándo se pasa de un equipo al otro.
 function bloqueGolesEquipo(team, players, etiqueta, color, fondo, golDe, bloqueado) {
@@ -1599,7 +1644,7 @@ function bloqueGolesEquipo(team, players, etiqueta, color, fondo, golDe, bloquea
       ${activos.length === 0 ? '<p class="muted" style="margin:0 0 8px">Este equipo no tiene jugadores habilitados.</p>' : ''}
       ${activos.map(p => `<div class="row" style="align-items:center;margin-bottom:6px">
         <div style="flex:1;font-size:14px">#${esc(p.numero)} ${esc(p.nombre)}</div>
-        <input type="number" min="0" id="gol_${p.id}" value="${golDe[p.id]||''}" placeholder="0" ${bloqueado?'disabled':''} style="width:60px;text-align:center;margin:0;background:#fff">
+        <input type="number" min="0" inputmode="numeric" id="gol_${p.id}" value="${golDe[p.id]||''}" placeholder="0" ${bloqueado ? 'disabled' : `oninput="arGol('${p.id}', this.value)"`} style="width:60px;text-align:center;margin:0;background:#fff">
       </div>`).join('')}
     </div>
   </div>`;
@@ -1611,152 +1656,207 @@ async function arbitroRedibujar() {
   const [tarjetas, playersA, playersB, goles] = await Promise.all([gsCall('getTarjetas', m.id), gsCall('getJugadores', teamA.id), gsCall('getJugadores', teamB.id), gsCall('getGoles', m.id)]);
   const nombreEquipoDe = {}; [teamA, teamB].forEach(t => nombreEquipoDe[t.id] = t.nombre);
   const nombreJugadorDe = {}; [...playersA, ...playersB].forEach(p => nombreJugadorDe[p.id] = '#' + esc(p.numero) + ' ' + esc(p.nombre));
-  const golDe = {}; goles.forEach(g => golDe[g.jugadorId] = g.goles);
-  // Lo que se mostró en pantalla: al guardar solo se envían los goles que el árbitro realmente cambió
-  window.__arGolesBase = {}; goles.forEach(g => window.__arGolesBase[g.jugadorId] = Number(g.goles) || 0);
-  const tieneResultado = m.golesA !== '' && m.golesA !== undefined && m.golesA !== null;
+  const equipoDeJugador = {}; playersA.forEach(p => equipoDeJugador[p.id] = teamA.id); playersB.forEach(p => equipoDeJugador[p.id] = teamB.id);
+  window.__arNombreJugadorDe = nombreJugadorDe;
+  window.__arNombreEquipoDeT = nombreEquipoDe;
+  window.__arEquipoDeJugador = equipoDeJugador;
+  window.__arTarjetasGuardadas = tarjetas;
   const finalizado = m.finalizado === true || String(m.finalizado).toUpperCase() === 'TRUE';
-  // Una vez guardado (o finalizado), el resultado y los goles quedan bloqueados y ya no se reactivan solos.
-  const bloqueado = tieneResultado || finalizado;
+  const tieneResultado = m.golesA !== '' && m.golesA !== undefined && m.golesA !== null;
+  const golesGuardados = {}; goles.forEach(g => { if (Number(g.goles) > 0) golesGuardados[g.jugadorId] = Number(g.goles); });
 
-  const nombreArbitroGuardado = m.arbitroNombre || '';
   let html = `<p class="muted" style="margin-top:-4px">${esc(m.nombre)}${m.fecha?' · '+fmtFechaPartido(m.fecha):''}${m.hora?' '+esc(m.hora):''}</p>`;
 
-  html += `<div class="card">
-    <div class="muted" style="margin-bottom:8px">Nombre del árbitro</div>
-    <input type="text" id="ar_nombre_arbitro" value="${esc(nombreArbitroGuardado)}" ${bloqueado?'disabled':''} placeholder="Quién está calificando este partido" style="width:100%">
-  </div>`;
-
+  // ---------- Partido ya cerrado: solo se muestra lo guardado ----------
   if (finalizado) {
     html += `<div class="card" style="text-align:center;background:#E3F3E8">
       <div style="font-size:26px;margin-bottom:2px">🔒</div>
-      <div style="font-weight:600">Este partido ya fue registrado</div>
-      <p class="muted" style="margin:4px 0 0">El árbitro cerró este partido. Ya no se puede editar el resultado, los goles ni registrar más tarjetas aquí.</p>
-    </div>`;
+      <div style="font-weight:600">Este partido ya fue guardado y cerrado</div>
+      <p class="muted" style="margin:4px 0 0">Si hay que corregir algo, el organizador puede reabrirlo.</p>
+    </div>
+    <div class="card" style="text-align:center">
+      <div class="row" style="justify-content:center;align-items:center;gap:16px">
+        <div style="flex:1;text-align:right;font-weight:600">${esc(teamA.nombre)}</div>
+        <div class="bebas" style="font-size:32px;color:#123626">${tieneResultado ? esc(m.golesA) + ' - ' + esc(m.golesB) : '— - —'}</div>
+        <div style="flex:1;text-align:left;font-weight:600">${esc(teamB.nombre)}</div>
+      </div>
+      ${m.arbitroNombre ? `<div class="muted" style="margin-top:6px">Árbitro: ${esc(m.arbitroNombre)}</div>` : ''}
+    </div>
+    <div class="card"><div class="muted" style="margin-bottom:4px">Goles por jugador</div>
+      ${bloqueGolesEquipo(teamA, playersA, 'LOCAL', '#123626', '#EEF3ED', golesGuardados, true)}
+      ${bloqueGolesEquipo(teamB, playersB, 'VISITANTE', '#0B5FA5', '#EAF2FB', golesGuardados, true)}
+    </div>
+    <div class="muted" style="margin:14px 0 6px">Tarjetas de este partido</div>`;
+    if (tarjetas.length === 0) html += '<p class="muted">No hubo tarjetas en este partido.</p>';
+    tarjetas.slice().reverse().forEach(t => { html += tarjetaCardHtml(t, nombreEquipoDe, nombreJugadorDe); });
+    body.innerHTML = html;
+    return;
   }
 
-  html += `<div class="card">
+  // ---------- Partido abierto: se trabaja sobre el borrador del celular ----------
+  let b = leerBorrador(m.id);
+  if (!b) {
+    b = {
+      matchId: m.id,
+      golesA: tieneResultado ? String(m.golesA) : '',
+      golesB: tieneResultado ? String(m.golesB) : '',
+      arbitro: m.arbitroNombre || '',
+      goles: golesGuardados,
+      tarjetas: []
+    };
+  }
+  window.__arBorrador = b;
+  guardarBorrador();
+
+  html += `<div class="card" style="background:#FBF3DC;font-size:14px">
+    📝 Llena el marcador, los goles por jugador y las tarjetas. <strong>Nada se guarda hasta que toques el botón verde del final</strong>,
+    "Guardar y finalizar partido". Lo que escribas queda guardado en este celular, aunque se vaya el internet.
+  </div>
+
+  <div class="card">
+    <div class="muted" style="margin-bottom:8px">Nombre del árbitro</div>
+    <input type="text" id="ar_nombre_arbitro" value="${esc(b.arbitro)}" oninput="arCampo('arbitro', this.value)" placeholder="Quién está calificando este partido" style="width:100%">
+  </div>
+
+  <div class="card">
     <div class="muted" style="margin-bottom:8px">Resultado del partido</div>
     <div class="row" style="align-items:center;gap:10px">
       <div style="flex:1;font-size:13px;font-weight:600">${esc(teamA.nombre)}</div>
-      <input type="number" min="0" id="ar_golesA" value="${tieneResultado?esc(m.golesA):''}" ${bloqueado?'disabled':''} style="width:70px;text-align:center;margin:0">
+      <input type="number" min="0" inputmode="numeric" id="ar_golesA" value="${esc(b.golesA)}" oninput="arCampo('golesA', this.value)" style="width:70px;text-align:center;margin:0">
       <div class="bebas" style="font-size:20px">-</div>
-      <input type="number" min="0" id="ar_golesB" value="${tieneResultado?esc(m.golesB):''}" ${bloqueado?'disabled':''} style="width:70px;text-align:center;margin:0">
+      <input type="number" min="0" inputmode="numeric" id="ar_golesB" value="${esc(b.golesB)}" oninput="arCampo('golesB', this.value)" style="width:70px;text-align:center;margin:0">
       <div style="flex:1;font-size:13px;font-weight:600;text-align:right">${esc(teamB.nombre)}</div>
     </div>
-      </div>
+  </div>
 
   <div class="card">
-    <div class="muted" style="margin-bottom:8px">Goles por jugador</div>
-    ${bloqueGolesEquipo(teamA, playersA, 'LOCAL', '#123626', '#EEF3ED', golDe, bloqueado)}
-    ${bloqueGolesEquipo(teamB, playersB, 'VISITANTE', '#0B5FA5', '#EAF2FB', golDe, bloqueado)}
-    ${finalizado ? '' : `<button class="btn-primary" id="ar_btn_todo" style="margin-top:6px;width:100%" ${tieneResultado?'disabled':''} onclick="arbitroGuardarTodo()">${tieneResultado?"✓ Guardado":"Guardar goles y resultado"}</button>`}
+    <div class="muted" style="margin-bottom:4px">Goles por jugador</div>
+    ${bloqueGolesEquipo(teamA, playersA, 'LOCAL', '#123626', '#EEF3ED', b.goles, false)}
+    ${bloqueGolesEquipo(teamB, playersB, 'VISITANTE', '#0B5FA5', '#EAF2FB', b.goles, false)}
+  </div>
+
+  <div class="card">
+    <div class="muted" style="margin-bottom:8px">Agregar amonestación</div>
+    <select id="ar_equipo" onchange="arbitroCargarJugadores()">
+      <option value="">Elige el equipo…</option>
+      <option value="${teamA.id}">${esc(teamA.nombre)}</option>
+      <option value="${teamB.id}">${esc(teamB.nombre)}</option>
+    </select>
+    <div class="muted" style="margin:4px 0 6px">Jugador</div>
+    <input type="hidden" id="ar_jugador" value="">
+    <div id="ar_jugador_lista" class="muted" style="margin-bottom:10px">Elige primero el equipo…</div>
+    <select id="ar_tipo">
+      <option value="amarilla">Tarjeta amarilla</option>
+      <option value="roja">Tarjeta roja</option>
+    </select>
+    <p class="muted" style="margin:4px 0 6px;font-size:13px">Si es roja, el organizador decide después cuántas fechas de suspensión lleva.</p>
+    <textarea id="ar_obs" rows="3" placeholder="Observaciones (motivo, detalle de la falta, etc.)" style="width:100%;padding:12px;border-radius:8px;border:1px solid #d8ded8;font-family:inherit;font-size:16px;margin-bottom:8px"></textarea>
+    <button class="btn-ghost" style="width:100%" onclick="arbitroAgregarTarjeta()">+ Agregar tarjeta a la lista</button>
+  </div>
+
+  <div class="muted" style="margin:14px 0 6px">Tarjetas de este partido</div>
+  <div id="ar_lista_tarjetas"></div>
+
+  <div class="card" style="margin-top:16px;border:2px solid #2E7D46">
+    <button class="btn-primary" id="ar_btn_final" style="width:100%;background:#2E7D46;font-size:18px;padding:16px" onclick="arbitroGuardarYFinalizar()">✅ Guardar y finalizar partido</button>
+    <div id="ar_final_error" style="color:#B3261E;font-size:14px;margin-top:8px"></div>
+    <p class="muted" style="font-size:13px;margin:8px 0 0">Guarda el marcador, los goleadores y las tarjetas, todo de una vez, y cierra el partido.</p>
   </div>`;
 
-  if (!finalizado) {
-    html += `<div class="card">
-      <div class="muted" style="margin-bottom:8px">Registrar amonestación</div>
-      <select id="ar_equipo" onchange="arbitroCargarJugadores()">
-        <option value="">Elige el equipo…</option>
-        <option value="${teamA.id}">${esc(teamA.nombre)}</option>
-        <option value="${teamB.id}">${esc(teamB.nombre)}</option>
-      </select>
-      <div class="muted" style="margin:4px 0 6px">Jugador</div>
-      <input type="hidden" id="ar_jugador" value="">
-      <div id="ar_jugador_lista" class="muted" style="margin-bottom:10px">Elige primero el equipo…</div>
-      <select id="ar_tipo">
-        <option value="amarilla">Tarjeta amarilla</option>
-        <option value="roja">Tarjeta roja</option>
-      </select>
-      <p class="muted" style="margin:4px 0 6px;font-size:13px">Si es roja, el organizador decide después cuántas fechas de suspensión lleva.</p>
-      <textarea id="ar_obs" rows="3" placeholder="Observaciones (motivo, detalle de la falta, etc.)" style="width:100%;padding:12px;border-radius:8px;border:1px solid #d8ded8;font-family:inherit;font-size:16px;margin-bottom:8px"></textarea>
-      <button class="btn-primary" id="ar_btn_tarjeta" onclick="arbitroRegistrar()">Registrar tarjeta</button>
-    </div>`;
-  }
-
-  html += `<div class="muted" style="margin:14px 0 6px">Tarjetas de este partido</div>`;
-  if (tarjetas.length === 0) html += '<p class="muted">Aún no hay tarjetas registradas en este partido.</p>';
-  tarjetas.slice().reverse().forEach(t => { html += tarjetaCardHtml(t, nombreEquipoDe, nombreJugadorDe); });
-
-  if (!finalizado) {
-    html += `<button class="btn-ghost" id="ar_btn_finalizar" style="width:100%;margin-top:14px" onclick="arbitroFinalizarPartido()">Finalizar registro de partido</button>`;
-  }
-
   body.innerHTML = html;
+  arPintarTarjetas();
 }
 
-// Cierra el partido para siempre en el panel del árbitro: ni hoy ni en otra sesión se podrá
-// editar el resultado, los goles ni registrar más tarjetas para este partido.
-async function arbitroFinalizarPartido() {
-  if (!confirm('¿Finalizar el registro de este partido?\n\nDespués de esto ya no vas a poder editar el resultado, los goles ni registrar más tarjetas aquí, ni siquiera si vuelves a entrar más tarde.')) return;
-  const btn = document.getElementById('ar_btn_finalizar');
-  if (btn.disabled) return;
-  btn.disabled = true;
-  const textoOriginal = btn.textContent;
-  btn.textContent = 'Finalizando…';
-  try {
-    await gsCall('finalizarPartido', window.__arMatch.id);
-    window.__arMatch.finalizado = true;
-    await arbitroRedibujar();
-  } catch (e) {
-    btn.disabled = false;
-    btn.textContent = textoOriginal;
-    alert(e && e.message ? e.message : 'No se pudo finalizar el partido.');
-  }
+// Pinta solo la lista de tarjetas (no toca el marcador ni los goles que ya están escritos)
+function arPintarTarjetas() {
+  const cont = document.getElementById('ar_lista_tarjetas'); if (!cont) return;
+  const b = window.__arBorrador || { tarjetas: [] };
+  const nj = window.__arNombreJugadorDe || {}, ne = window.__arNombreEquipoDeT || {};
+  const guardadas = window.__arTarjetasGuardadas || [];
+  let h = '';
+  if (b.tarjetas.length === 0 && guardadas.length === 0) h = '<p class="muted">Aún no hay tarjetas en este partido.</p>';
+  b.tarjetas.slice().reverse().forEach(t => {
+    const roja = t.tipo === 'roja';
+    h += `<div class="card" style="border:1px dashed #B8860B">
+      <div class="row" style="align-items:center">
+        <span class="badge" style="color:${roja?'#B3261E':'#7A4E00'};background:${roja?'#FBEAE9':'#FDECC8'}">${roja?'Roja':'Amarilla'}</span>
+        <div style="flex:1">
+          <div style="font-weight:600">${nj[t.jugadorId] || '—'}</div>
+          <div class="muted">${esc(ne[t.equipoId] || '')}</div>
+        </div>
+        <button class="btn-ghost" style="padding:8px 12px;color:#B3261E" onclick="arQuitarTarjeta('${t.id}')">✕</button>
+      </div>
+      ${t.observaciones ? `<div style="margin-top:6px;font-size:14px">${esc(t.observaciones)}</div>` : ''}
+      <div style="margin-top:6px"><span class="badge" style="color:#B8860B;background:#FBF3DC">Por guardar</span></div>
+    </div>`;
+  });
+  guardadas.slice().reverse().forEach(t => { h += tarjetaCardHtml(t, ne, nj); });
+  cont.innerHTML = h;
 }
 
-// Guarda el resultado del partido Y los goles por jugador en un solo paso.
-// Al terminar bien, el botón queda bloqueado diciendo "✓ Guardado" y no se vuelve a activar solo:
-// para corregir algo hay que volver a elegir el partido (eso refresca todo el panel).
-async function arbitroGuardarTodo() {
-  const btn = document.getElementById('ar_btn_todo');
-  if (btn.disabled) return;   // evita el doble clic mientras se está guardando
-  const m = window.__arMatch;
-  const golesA = document.getElementById('ar_golesA').value;
-  const golesB = document.getElementById('ar_golesB').value;
-  const nombreArbitro = document.getElementById('ar_nombre_arbitro').value.trim();
-  if (!nombreArbitro) { alert('Escribe el nombre del árbitro antes de guardar.'); return; }
-  if (golesA === '' || golesB === '') { alert('Completa el marcador de ambos equipos.'); return; }
+function arbitroAgregarTarjeta() {
+  const b = window.__arBorrador; if (!b) return;
+  const equipoId = document.getElementById('ar_equipo').value;
+  const jugadorId = document.getElementById('ar_jugador').value;
+  const tipo = document.getElementById('ar_tipo').value;
+  const obs = document.getElementById('ar_obs').value.trim().toUpperCase();
+  if (!equipoId || !jugadorId) { alert('Elige el equipo y el jugador de la tarjeta.'); return; }
+  b.tarjetas.push({ id: idTarjetaNueva(), equipoId, jugadorId, tipo, observaciones: obs });
+  guardarBorrador();
+  // Se limpia solo el formulario de la tarjeta, para agregar la siguiente
+  document.getElementById('ar_obs').value = '';
+  document.getElementById('ar_tipo').value = 'amarilla';
+  document.getElementById('ar_jugador').value = '';
+  document.querySelectorAll('#ar_jugador_lista .card').forEach(el => { el.style.border = '1px solid transparent'; });
+  arPintarTarjetas();
+}
 
-  const teamA = window.__arTeams.a, teamB = window.__arTeams.b;
-  const [playersA, playersB] = await Promise.all([gsCall('getJugadores', teamA.id), gsCall('getJugadores', teamB.id)]);
-  const base = window.__arGolesBase || {};
-  const cambiosGoles = [];
-  for (const [team, players] of [[teamA, playersA], [teamB, playersB]]) {
-    for (const p of players) {
-      const el = document.getElementById('gol_' + p.id);
-      if (!el) continue;
-      const nuevo = Number(el.value) || 0;
-      if (nuevo !== (base[p.id] || 0)) cambiosGoles.push([p.id, team.id, nuevo]);
-    }
-  }
+function arQuitarTarjeta(id) {
+  const b = window.__arBorrador; if (!b) return;
+  if (!confirm('¿Quitar esta tarjeta de la lista? (todavía no se había guardado)')) return;
+  b.tarjetas = b.tarjetas.filter(t => t.id !== id);
+  guardarBorrador();
+  arPintarTarjetas();
+}
+
+async function arbitroGuardarYFinalizar() {
+  const btn = document.getElementById('ar_btn_final');
+  if (!btn || btn.disabled) return;
+  const m = window.__arMatch, b = window.__arBorrador, teamA = window.__arTeams.a, teamB = window.__arTeams.b;
+  const errEl = document.getElementById('ar_final_error');
+  errEl.textContent = '';
+  const arbitro = String(b.arbitro || '').trim();
+  if (!arbitro) { alert('Escribe el nombre del árbitro.'); return; }
+  if (String(b.golesA).trim() === '' || String(b.golesB).trim() === '') { alert('Completa el marcador de los dos equipos (si un equipo no hizo goles, escribe 0).'); return; }
+  const gA = parseInt(b.golesA, 10), gB = parseInt(b.golesB, 10);
+  if (isNaN(gA) || isNaN(gB) || gA < 0 || gB < 0) { alert('El marcador no es válido.'); return; }
+
+  const equipoDe = window.__arEquipoDeJugador || {};
+  const golesLista = Object.entries(b.goles || {}).filter(([jid, n]) => n > 0 && equipoDe[jid]).map(([jid, n]) => [jid, equipoDe[jid], n]);
+  const sumA = golesLista.filter(g => g[1] === teamA.id).reduce((s, g) => s + g[2], 0);
+  const sumB = golesLista.filter(g => g[1] === teamB.id).reduce((s, g) => s + g[2], 0);
+  const avisos = [];
+  if (sumA !== gA) avisos.push(`${teamA.nombre}: el marcador dice ${gA}, pero los goles por jugador suman ${sumA}.`);
+  if (sumB !== gB) avisos.push(`${teamB.nombre}: el marcador dice ${gB}, pero los goles por jugador suman ${sumB}.`);
+  if (avisos.length && !confirm(avisos.join('\n') + '\n\nSi la diferencia es por un autogol, puedes guardar así.\n¿Guardar de todas formas?')) return;
+  if (!confirm(`Vas a guardar:\n\n${teamA.nombre} ${gA} - ${gB} ${teamB.nombre}\nGoleadores: ${golesLista.length}\nTarjetas nuevas: ${b.tarjetas.length}\n\nDespués de esto el partido queda CERRADO y ya no se puede cambiar.\n¿Guardar y finalizar?`)) return;
 
   btn.disabled = true;
   const textoOriginal = btn.textContent;
   btn.textContent = 'Guardando…';
-  let resultadoGuardado = false;
   try {
-    await gsCall('guardarResultado', m.id, Number(golesA), Number(golesB), nombreArbitro);
-    resultadoGuardado = true;
-    window.__arMatch.arbitroNombre = nombreArbitro;
-    // Muy importante: actualizar la copia local del partido. Si no se hace esto, al registrar
-    // una tarjeta después, el panel se vuelve a dibujar creyendo que el resultado seguía sin guardar
-    // y reaparecían habilitados el marcador y los goles.
-    window.__arMatch.golesA = Number(golesA);
-    window.__arMatch.golesB = Number(golesB);
-    if (cambiosGoles.length > 0) await gsCall('guardarGolesLote', m.id, cambiosGoles);
-    btn.textContent = '✓ Guardado';
-    document.getElementById('ar_golesA').disabled = true;
-    document.getElementById('ar_golesB').disabled = true;
-    document.getElementById('ar_nombre_arbitro').disabled = true;
-    [...playersA, ...playersB].forEach(p => { const el = document.getElementById('gol_' + p.id); if (el) el.disabled = true; });
+    await gsCall('registrarPartidoCompleto', m.id, { golesA: gA, golesB: gB, arbitroNombre: arbitro, goles: golesLista, tarjetas: b.tarjetas });
+    borrarBorrador(m.id);
+    window.__arBorrador = null;
+    window.__arMatch.finalizado = true;
+    window.__arMatch.golesA = gA; window.__arMatch.golesB = gB;
+    window.__arMatch.arbitroNombre = arbitro.toUpperCase();
+    await arbitroRedibujar();
+    alert('✅ Partido guardado y cerrado.');
   } catch (e) {
     btn.disabled = false;
     btn.textContent = textoOriginal;
-    const detalle = (e && e.message) ? e.message : 'No se pudo guardar.';
-    alert(resultadoGuardado
-      ? 'El resultado sí se guardó, pero los goles por jugador no. Puedes tocar "Guardar goles y resultado" otra vez para intentarlo de nuevo. (Detalle: ' + detalle + ')'
-      : detalle);
+    errEl.textContent = 'No se pudo guardar (' + ((e && e.message) || 'error de conexión') + '). No se perdió nada: los datos siguen aquí. Revisa la señal y vuelve a tocar el botón.';
   }
 }
 
@@ -1791,32 +1891,6 @@ function arbitroSeleccionarJugador(id) {
   document.querySelectorAll('#ar_jugador_lista .card').forEach(el => {
     el.style.border = el.id === 'arp_' + id ? '2px solid #123626' : '1px solid transparent';
   });
-}
-
-async function arbitroRegistrar() {
-  const btn = document.getElementById('ar_btn_tarjeta');
-  if (btn.disabled) return;   // evita el doble clic mientras se está guardando (por eso se duplicaban las tarjetas)
-  const m = window.__arMatch, teams = window.__arTeams;
-  if (m.finalizado === true || String(m.finalizado).toUpperCase() === 'TRUE') return;   // resguardo extra: este partido ya quedó cerrado
-  const equipoId = document.getElementById('ar_equipo').value;
-  const jugadorId = document.getElementById('ar_jugador').value;
-  const tipo = document.getElementById('ar_tipo').value;
-  const obs = document.getElementById('ar_obs').value.trim();
-  if (!equipoId || !jugadorId) return;
-  btn.disabled = true;
-  const textoOriginal = btn.textContent;
-  btn.textContent = 'Guardando…';
-  try {
-    const team = (teams.a.id === equipoId) ? teams.a : teams.b;
-    const players = await gsCall('getJugadores', equipoId);
-    const jugador = players.find(p => p.id === jugadorId);
-    await gsCall('addTarjeta', m.id, equipoId, jugadorId, tipo, obs, team.nombre, jugador ? jugador.nombre : '', m.nombre, m.jornada, 0);
-    await arbitroRedibujar();   // redibuja todo el panel: el botón vuelve a nacer normal, listo para la siguiente tarjeta
-  } catch (e) {
-    btn.disabled = false;
-    btn.textContent = textoOriginal;
-    alert(e && e.message ? e.message : 'No se pudo registrar la tarjeta.');
-  }
 }
 
 function tarjetaCardHtml(t, nombreEquipoDe, nombreJugadorDe) {
