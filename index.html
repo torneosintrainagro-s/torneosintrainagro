@@ -1737,21 +1737,24 @@ async function arbitroRedibujar() {
 
   <div class="card">
     <div class="muted" style="margin-bottom:8px">Agregar amonestación</div>
+    <input type="hidden" id="ar_tipo" value="amarilla">
+    <div class="row" style="gap:8px;margin-bottom:10px">
+      <button id="ar_tipo_amarilla" class="btn-ghost" style="flex:1" onclick="arElegirTipo('amarilla')">🟨 Amarilla</button>
+      <button id="ar_tipo_roja" class="btn-ghost" style="flex:1" onclick="arElegirTipo('roja')">🟥 Roja</button>
+    </div>
     <select id="ar_equipo" onchange="arbitroCargarJugadores()">
       <option value="">Elige el equipo…</option>
       <option value="${teamA.id}">${esc(teamA.nombre)}</option>
       <option value="${teamB.id}">${esc(teamB.nombre)}</option>
     </select>
-    <div class="muted" style="margin:4px 0 6px">Jugador</div>
+    <div class="muted" id="ar_jug_titulo" style="margin:4px 0 6px">Jugadores (toca todos los que recibieron amarilla)</div>
     <input type="hidden" id="ar_jugador" value="">
     <div id="ar_jugador_lista" class="muted" style="margin-bottom:10px">Elige primero el equipo…</div>
-    <select id="ar_tipo">
-      <option value="amarilla">Tarjeta amarilla</option>
-      <option value="roja">Tarjeta roja</option>
-    </select>
-    <p class="muted" style="margin:4px 0 6px;font-size:13px">Si es roja, el organizador decide después cuántas fechas de suspensión lleva.</p>
-    <textarea id="ar_obs" rows="3" placeholder="Observaciones (motivo, detalle de la falta, etc.)" style="width:100%;padding:12px;border-radius:8px;border:1px solid #d8ded8;font-family:inherit;font-size:16px;margin-bottom:8px"></textarea>
-    <button class="btn-ghost" style="width:100%" onclick="arbitroAgregarTarjeta()">+ Agregar tarjeta a la lista</button>
+    <div id="ar_obs_wrap" style="display:none">
+      <p class="muted" style="margin:4px 0 6px;font-size:13px">Escribe el motivo de la roja. El organizador decide después cuántas fechas de suspensión lleva.</p>
+      <textarea id="ar_obs" rows="3" placeholder="Observaciones (motivo, detalle de la falta, etc.)" style="width:100%;padding:12px;border-radius:8px;border:1px solid #d8ded8;font-family:inherit;font-size:16px;margin-bottom:8px"></textarea>
+    </div>
+    <button class="btn-ghost" id="ar_btn_agregar" style="width:100%" onclick="arbitroAgregarTarjeta()">+ Agregar a la lista</button>
   </div>
 
   <div class="muted" style="margin:14px 0 6px">Tarjetas de este partido</div>
@@ -1764,6 +1767,8 @@ async function arbitroRedibujar() {
   </div>`;
 
   body.innerHTML = html;
+  window.__arSeleccion = [];
+  arElegirTipo('amarilla');
   arPintarTarjetas();
 }
 
@@ -1797,17 +1802,26 @@ function arPintarTarjetas() {
 function arbitroAgregarTarjeta() {
   const b = window.__arBorrador; if (!b) return;
   const equipoId = document.getElementById('ar_equipo').value;
-  const jugadorId = document.getElementById('ar_jugador').value;
-  const tipo = document.getElementById('ar_tipo').value;
-  const obs = document.getElementById('ar_obs').value.trim().toUpperCase();
-  if (!equipoId || !jugadorId) { alert('Elige el equipo y el jugador de la tarjeta.'); return; }
-  b.tarjetas.push({ id: idTarjetaNueva(), equipoId, jugadorId, tipo, observaciones: obs });
+  const tipo = arTipoActual();
+  const seleccion = [...window.__arSeleccion];
+  if (!equipoId || seleccion.length === 0) { alert(tipo === 'roja' ? 'Elige el equipo y el jugador expulsado.' : 'Elige el equipo y toca los jugadores que recibieron amarilla.'); return; }
+  const obs = tipo === 'roja' ? document.getElementById('ar_obs').value.trim().toUpperCase() : '';
+
+  // Aviso si alguno ya tiene amarilla en este partido (por si es la segunda amarilla)
+  if (tipo === 'amarilla') {
+    const nj = window.__arNombreJugadorDe || {};
+    const yaTienen = seleccion.filter(id =>
+      b.tarjetas.some(t => t.jugadorId === id && t.tipo === 'amarilla') ||
+      (window.__arTarjetasGuardadas || []).some(t => t.jugadorId === id && t.tipo === 'amarilla'));
+    if (yaTienen.length && !confirm('Ya tiene amarilla en este partido:\n' + yaTienen.map(id => nj[id] || '—').join('\n') + '\n\n¿Agregarle otra amarilla?')) return;
+  }
+
+  seleccion.forEach(jugadorId => b.tarjetas.push({ id: idTarjetaNueva(), equipoId, jugadorId, tipo, observaciones: obs }));
   guardarBorrador();
-  // Se limpia solo el formulario de la tarjeta, para agregar la siguiente
+  // Se limpia la selección para agregar las siguientes (el equipo queda elegido)
+  window.__arSeleccion = [];
   document.getElementById('ar_obs').value = '';
-  document.getElementById('ar_tipo').value = 'amarilla';
-  document.getElementById('ar_jugador').value = '';
-  document.querySelectorAll('#ar_jugador_lista .card').forEach(el => { el.style.border = '1px solid transparent'; });
+  arElegirTipo('amarilla');
   arPintarTarjetas();
 }
 
@@ -1864,6 +1878,8 @@ async function arbitroCargarJugadores() {
   const equipoId = document.getElementById('ar_equipo').value;
   const lista = document.getElementById('ar_jugador_lista');
   document.getElementById('ar_jugador').value = '';
+  window.__arSeleccion = [];
+  arPintarSeleccion();
   if (!equipoId) { lista.className = 'muted'; lista.innerHTML = 'Elige primero el equipo…'; return; }
   lista.className = 'muted'; lista.innerHTML = 'Cargando…';
   let players;
@@ -1878,19 +1894,69 @@ async function arbitroCargarJugadores() {
   lista.className = 'stack';
   if (players.length === 0) { lista.className = 'muted'; lista.innerHTML = 'Este equipo no tiene jugadores registrados.'; return; }
   lista.innerHTML = players.map(p => `<div class="card row" id="arp_${p.id}" style="cursor:pointer;align-items:center;padding:8px" onclick="arbitroSeleccionarJugador('${p.id}')">
+    <div class="ar-chk" style="width:28px;height:28px;border-radius:6px;border:2px solid #c7d2c9;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;flex-shrink:0"></div>
     <div class="photo" style="width:44px;height:44px">${p.fotoUrl ? `<img src="${esc(p.fotoUrl)}">` : ''}</div>
     <div style="flex:1">
       <div style="font-weight:600;font-size:14px">${esc(p.nombre)}</div>
       <div class="muted">#${esc(p.numero)} · ${esc(p.posicion)}</div>
     </div>
   </div>`).join('');
+  arPintarSeleccion();
+}
+
+// ---- Selección de jugadores para tarjetas ----
+// AMARILLA: se pueden marcar VARIOS jugadores del equipo a la vez (sin observaciones).
+// ROJA: un solo jugador, con observaciones (el motivo de la expulsión).
+window.__arSeleccion = [];
+function arTipoActual() { const el = document.getElementById('ar_tipo'); return el ? el.value : 'amarilla'; }
+
+function arElegirTipo(tipo) {
+  document.getElementById('ar_tipo').value = tipo;
+  const am = document.getElementById('ar_tipo_amarilla'), ro = document.getElementById('ar_tipo_roja');
+  am.style.background = tipo === 'amarilla' ? '#FDECC8' : 'transparent';
+  am.style.borderColor = tipo === 'amarilla' ? '#B8860B' : '#c7d2c9';
+  am.style.borderWidth = tipo === 'amarilla' ? '2px' : '1px';
+  ro.style.background = tipo === 'roja' ? '#FBEAE9' : 'transparent';
+  ro.style.borderColor = tipo === 'roja' ? '#B3261E' : '#c7d2c9';
+  ro.style.borderWidth = tipo === 'roja' ? '2px' : '1px';
+  document.getElementById('ar_obs_wrap').style.display = tipo === 'roja' ? 'block' : 'none';
+  document.getElementById('ar_jug_titulo').textContent = tipo === 'roja'
+    ? 'Jugador expulsado (toca uno solo)'
+    : 'Jugadores (toca todos los que recibieron amarilla)';
+  if (tipo === 'roja' && window.__arSeleccion.length > 1) window.__arSeleccion = [];   // la roja es de a uno
+  arPintarSeleccion();
 }
 
 function arbitroSeleccionarJugador(id) {
-  document.getElementById('ar_jugador').value = id;
+  const sel = window.__arSeleccion;
+  if (arTipoActual() === 'roja') {
+    window.__arSeleccion = (sel.length === 1 && sel[0] === id) ? [] : [id];
+  } else {
+    window.__arSeleccion = sel.includes(id) ? sel.filter(x => x !== id) : [...sel, id];
+  }
+  arPintarSeleccion();
+}
+
+function arPintarSeleccion() {
+  const sel = window.__arSeleccion;
+  const roja = arTipoActual() === 'roja';
+  const colorSel = roja ? '#B3261E' : '#B8860B', fondoSel = roja ? '#FBEAE9' : '#FDECC8';
   document.querySelectorAll('#ar_jugador_lista .card').forEach(el => {
-    el.style.border = el.id === 'arp_' + id ? '2px solid #123626' : '1px solid transparent';
+    const id = el.id.replace('arp_', '');
+    const marcado = sel.includes(id);
+    el.style.border = marcado ? `2px solid ${colorSel}` : '1px solid transparent';
+    el.style.background = marcado ? fondoSel : '#fff';
+    const chk = el.querySelector('.ar-chk');
+    if (chk) { chk.textContent = marcado ? '✓' : ''; chk.style.background = marcado ? colorSel : '#fff'; chk.style.borderColor = marcado ? colorSel : '#c7d2c9'; }
   });
+  const hid = document.getElementById('ar_jugador'); if (hid) hid.value = sel[0] || '';
+  const btn = document.getElementById('ar_btn_agregar');
+  if (btn) {
+    const n = sel.length;
+    btn.textContent = roja
+      ? (n ? '+ Agregar roja a la lista' : '+ Agregar a la lista')
+      : (n ? `+ Agregar ${n} amarilla${n === 1 ? '' : 's'} a la lista` : '+ Agregar a la lista');
+  }
 }
 
 function tarjetaCardHtml(t, nombreEquipoDe, nombreJugadorDe) {
