@@ -219,6 +219,18 @@ const STATUS = {
   lesionado:  {label:'Lesionado',  color:'#B8860B', bg:'#FBF3DC'}
 };
 
+// ===================== PARTIDOS GANADOS POR W =====================
+// Retiro de la cancha o no presentación: el otro equipo gana los 3 puntos.
+// Los goles del "3 a 0" NO cuentan para nada (ni jugadores, ni goles del equipo, ni valla).
+const MOTIVOS_W = { retiro: 'el rival se retiró de la cancha', no_presentacion: 'el rival no se presentó' };
+function lineaW(m, nombreDe) {
+  if (!m.ganadorW) return '';
+  return `<div style="margin-top:8px;padding:8px 10px;border-radius:8px;background:#FBF3DC;color:#7A4E00;font-weight:600;font-size:14px;text-align:left">
+    ⚖️ Ganó por W: ${esc(nombreDe[m.ganadorW] || '—')} — ${esc(MOTIVOS_W[m.motivoW] || '')}.
+    <div style="font-weight:400;font-size:13px">Se le suman 3 puntos. Los goles del W no cuentan.</div>
+  </div>`;
+}
+
 function fmtTime(iso){ try { const d=new Date(iso); return d.toLocaleString('es-CO',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}); } catch(e){ return iso; } }
 function esc(s){ return (s||'').toString().replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function fmtFechaPartido(iso) {
@@ -464,9 +476,20 @@ async function orgResumenHtml() {
   teams.forEach(t => { statsDe[t.id] = { id: t.id, nombre: t.nombre, pj: 0, pts: 0, gf: 0, gc: 0, ta: 0, tr: 0 }; });
   matches.forEach(m => {
     const tieneResultado = m.golesA !== '' && m.golesA !== undefined && m.golesA !== null;
-    if (!tieneResultado) return;
     const a = statsDe[m.equipoA], b = statsDe[m.equipoB];
     if (!a || !b) return;
+    if (m.ganadorW) {
+      // Ganado por W: 3 puntos al ganador y 0 al otro. Los "3 a 0" NO se suman como goles;
+      // solo cuentan los goles reales que el árbitro haya registrado antes del retiro (si los hubo).
+      a.pj++; b.pj++;
+      if (String(m.ganadorW) === String(m.equipoA)) a.pts += 3; else b.pts += 3;
+      if (tieneResultado) {
+        const rA = Number(m.golesA) || 0, rB = Number(m.golesB) || 0;
+        a.gf += rA; a.gc += rB; b.gf += rB; b.gc += rA;
+      }
+      return;
+    }
+    if (!tieneResultado) return;
     const gA = Number(m.golesA), gB = Number(m.golesB);
     a.pj++; b.pj++;
     a.gf += gA; a.gc += gB;
@@ -697,6 +720,8 @@ function orgPartidoCardHtml(m, nombreDe) {
       ${m.observaciones?`<div class="muted" style="color:#B8860B;margin-top:4px">⚠ ${esc(m.observaciones)}</div>`:''}
     </div>
     <button class="btn-ghost" style="margin-top:8px" onclick="event.stopPropagation(); editarPartidoForm('${m.id}')">Editar día / hora / cancha</button>
+    ${m.ganadorW ? lineaW(m, nombreDe) + `<button class="btn-ghost" style="margin-top:6px" onclick="event.stopPropagation(); orgQuitarW('${m.id}')">Quitar el W</button>`
+      : `<button class="btn-ghost" style="margin-top:6px" onclick="event.stopPropagation(); orgAbrirW('${m.id}')">⚖️ Dar por W (retiro o no presentación)</button>`}
     ${finalizado ? `<div class="muted" style="margin-top:8px;color:#2E7D46">🔒 Cerrado por el árbitro</div>
     <button class="btn-ghost" style="margin-top:6px" onclick="event.stopPropagation(); orgReabrirPartido('${m.id}')">🔓 Reabrir para que el árbitro corrija</button>` : ''}
     ${(tieneResultado || finalizado) ? `<button class="btn-ghost" style="margin-top:6px;color:#B3261E" onclick="event.stopPropagation(); orgReiniciarResultado('${m.id}')">Reiniciar resultado (borra todo)</button>` : ''}
@@ -705,6 +730,77 @@ function orgPartidoCardHtml(m, nombreDe) {
 
 // Solo para el organizador: deja un partido como si nunca se hubiera calificado, para corregir
 // un error del árbitro (por ejemplo, calificó un partido de ensayo por equivocación).
+// Ventana para dar un partido por W: se elige el equipo GANADOR y el motivo.
+function orgAbrirW(matchId) {
+  const m = window.__matchesData[matchId];
+  const nombreDe = window.__nombreEquipoPartidos || {};
+  if (!m) return;
+  window.__wGanador = ''; window.__wMotivo = '';
+  const caja = document.createElement('div');
+  caja.className = 'lightbox';
+  caja.id = 'ventanaW';
+  caja.style.alignItems = 'flex-start';
+  caja.style.overflowY = 'auto';
+  caja.innerHTML = `<div class="card" style="max-width:440px;width:100%;margin-top:40px" onclick="event.stopPropagation()">
+    <h2 class="bebas" style="margin:0 0 4px">Dar partido por W</h2>
+    <p class="muted" style="margin:0 0 12px">${esc(nombreDe[m.equipoA])} vs ${esc(nombreDe[m.equipoB])} · ${esc(m.nombre)}</p>
+    <div class="lbl">¿Qué equipo GANA? (el que se quedó o el que sí se presentó)</div>
+    <div class="stack" style="margin-bottom:12px">
+      <button class="btn-ghost" id="w_g_${m.equipoA}" onclick="orgElegirW('ganador','${m.equipoA}')">${esc(nombreDe[m.equipoA])}</button>
+      <button class="btn-ghost" id="w_g_${m.equipoB}" onclick="orgElegirW('ganador','${m.equipoB}')">${esc(nombreDe[m.equipoB])}</button>
+    </div>
+    <div class="lbl">¿Por qué?</div>
+    <div class="stack" style="margin-bottom:12px">
+      <button class="btn-ghost" id="w_m_retiro" onclick="orgElegirW('motivo','retiro')">El rival se retiró de la cancha</button>
+      <button class="btn-ghost" id="w_m_no_presentacion" onclick="orgElegirW('motivo','no_presentacion')">El rival no se presentó</button>
+    </div>
+    <p class="muted" style="font-size:13px">El ganador recibe 3 puntos y el otro 0. Los goles del W (3 a 0) no se suman a ningún jugador, ni al equipo, ni a la valla menos vencida.</p>
+    <div class="row" style="gap:8px">
+      <button class="btn-primary" style="flex:1" id="w_btn_ok" onclick="orgConfirmarW('${m.id}')">Confirmar W</button>
+      <button class="btn-ghost" onclick="document.getElementById('ventanaW').remove()">Cancelar</button>
+    </div>
+  </div>`;
+  document.body.appendChild(caja);
+}
+
+function orgElegirW(cual, valor) {
+  if (cual === 'ganador') window.__wGanador = valor; else window.__wMotivo = valor;
+  document.querySelectorAll('#ventanaW button[id^="w_g_"]').forEach(b => {
+    const on = b.id === 'w_g_' + window.__wGanador;
+    b.style.background = on ? '#123626' : 'transparent'; b.style.color = on ? '#fff' : '#123626';
+  });
+  document.querySelectorAll('#ventanaW button[id^="w_m_"]').forEach(b => {
+    const on = b.id === 'w_m_' + window.__wMotivo;
+    b.style.background = on ? '#123626' : 'transparent'; b.style.color = on ? '#fff' : '#123626';
+  });
+}
+
+async function orgConfirmarW(matchId) {
+  if (!window.__wGanador || !window.__wMotivo) { alert('Elige el equipo que gana y el motivo.'); return; }
+  const nombreDe = window.__nombreEquipoPartidos || {};
+  if (!confirm(`¿Dar el partido por W a ${nombreDe[window.__wGanador] || ''}?\n\nRecibe 3 puntos y el partido queda cerrado.`)) return;
+  const btn = document.getElementById('w_btn_ok');
+  btn.disabled = true; btn.textContent = 'Guardando…';
+  try {
+    await gsCall('fijarResultadoW', matchId, window.__wGanador, window.__wMotivo);
+    const v = document.getElementById('ventanaW'); if (v) v.remove();
+    await renderOrg();
+  } catch (e) {
+    btn.disabled = false; btn.textContent = 'Confirmar W';
+    alert(e && e.message ? e.message : 'No se pudo guardar el W.');
+  }
+}
+
+async function orgQuitarW(matchId) {
+  if (!confirm('¿Quitar el W de este partido?\n\nLos puntos volverán a calcularse con el marcador normal.')) return;
+  try {
+    await gsCall('quitarResultadoW', matchId);
+    await renderOrg();
+  } catch (e) {
+    alert(e && e.message ? e.message : 'No se pudo quitar el W.');
+  }
+}
+
 // Solo para el organizador: vuelve a abrir un partido cerrado para que el árbitro corrija.
 // NO borra nada: el marcador, los goles y las tarjetas que ya estaban se conservan.
 async function orgReabrirPartido(matchId) {
@@ -876,6 +972,7 @@ async function verPartido(matchId) {
   } else {
     resultadoHtml += '<p class="muted">El árbitro aún no registra el resultado.</p>';
   }
+  if (m.ganadorW) resultadoHtml += lineaW(m, { [teamA.id]: teamA.nombre, [teamB.id]: teamB.nombre });
   const golesTeam = (equipoId) => goles.filter(g => g.equipoId === equipoId).map(g => `${esc(nombreJugadorDe[g.jugadorId]||'—')} (${esc(g.goles)})`).join(', ');
   if (goles.length) {
     resultadoHtml += `<div style="margin-top:10px;text-align:left;border-top:1px solid #eef1ee;padding-top:8px">
@@ -1105,7 +1202,11 @@ async function delegatePartidosHtml() {
         ${m.cancha?`<div class="muted">📍 ${esc(m.cancha)}</div>`:''}
         ${m.observaciones?`<div class="muted" style="color:#B8860B">⚠ ${esc(m.observaciones)}</div>`:''}
       </div>
-      ${tieneResultado ? `<div class="bebas" style="font-size:20px;color:#123626">${marcador}</div>` : '<span class="badge" style="color:#8a978d;background:#eef1ee">Sin jugar</span>'}
+      ${m.ganadorW
+        ? (String(m.ganadorW) === String(STATE.team.id)
+            ? '<span class="badge" style="color:#2E7D46;background:#E3F3E8">Ganado por W</span>'
+            : '<span class="badge" style="color:#B3261E;background:#FBEAE9">Perdido por W</span>')
+        : (tieneResultado ? `<div class="bebas" style="font-size:20px;color:#123626">${marcador}</div>` : '<span class="badge" style="color:#8a978d;background:#eef1ee">Sin jugar</span>')}
     </div>`;
   });
 
@@ -1171,6 +1272,7 @@ async function verPartidoDelegado(matchId) {
   } else {
     resultadoHtml += '<p class="muted">El árbitro aún no registra el resultado de este partido.</p>';
   }
+  if (m.ganadorW) resultadoHtml += lineaW(m, { [teamA.id]: teamA.nombre, [teamB.id]: teamB.nombre });
   const golesTeam = (equipoId) => goles.filter(g => g.equipoId === equipoId).map(g => `${esc(nombreJugadorDe[g.jugadorId]||'—')} (${esc(g.goles)})`).join(', ');
   if (goles.length) {
     resultadoHtml += `<div style="margin-top:10px;text-align:left;border-top:1px solid #eef1ee;padding-top:8px">
@@ -1487,7 +1589,7 @@ async function enVivoCargar() {
   const body = document.getElementById('ev_body');
   if (!matchId) { body.innerHTML=''; return; }
   const partido = (window.__evMatches || []).find(m => m.id === matchId);
-  const yaJugado = partido && partido.golesA !== '' && partido.golesA !== undefined && partido.golesA !== null;
+  const yaJugado = partido && (partido.ganadorW || (partido.golesA !== '' && partido.golesA !== undefined && partido.golesA !== null));
   if (yaJugado) {
     body.innerHTML = `<div class="card" style="text-align:center;padding:20px">
       <div style="font-size:32px;margin-bottom:8px">🏁</div>
@@ -1681,6 +1783,7 @@ async function arbitroRedibujar() {
         <div style="flex:1;text-align:left;font-weight:600">${esc(teamB.nombre)}</div>
       </div>
       ${m.arbitroNombre ? `<div class="muted" style="margin-top:6px">Árbitro: ${esc(m.arbitroNombre)}</div>` : ''}
+      ${lineaW(m, nombreEquipoDe)}
     </div>
     <div class="card"><div class="muted" style="margin-bottom:4px">Goles por jugador</div>
       ${bloqueGolesEquipo(teamA, playersA, 'LOCAL', '#123626', '#EEF3ED', golesGuardados, true)}
