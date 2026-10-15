@@ -455,14 +455,55 @@ function descargarResumenPDF() {
   doc.save('resumen_torneo.pdf');
 }
 
-function descargarProgramacionPDF() {
+// Estado de cada partido para el PDF: JUGADO (con marcador), W o POR JUGAR
+function estadoPartidoPDF(m, nombreDe) {
+  if (m.ganadorW) return { tipo: 'w', texto: 'W · GANA ' + (nombreDe[m.ganadorW] || '') };
+  const jugado = m.golesA !== '' && m.golesA !== undefined && m.golesA !== null;
+  if (jugado) return { tipo: 'jugado', texto: `JUGADO · ${m.golesA} - ${m.golesB}` };
+  return { tipo: 'pendiente', texto: 'POR JUGAR' };
+}
+
+// PDF de la programación de una fecha.
+//  - Completo: todos los partidos, con una columna ESTADO (jugado con su marcador / W / por jugar).
+//    Los ya jugados salen en gris y los pendientes resaltados en verde.
+//  - soloPendientes = true: solo los partidos que faltan por jugar (ideal para mandar al grupo).
+// Si el partido tiene una observación (por ejemplo, "APLAZADO POR LLUVIA"), sale debajo del estado.
+function descargarProgramacionPDF(soloPendientes) {
   const fecha = document.getElementById('pdf_fecha_sel').value;
   const nombreDe = window.__nombreEquipoPartidos || {};
   const partidos = Object.values(window.__matchesData || {}).filter(m => String(m.jornada) === String(fecha));
-  partidos.sort((a, b) => (a.hora || '').localeCompare(b.hora || ''));
-  const headers = ['Local', 'Visitante', 'Día', 'Hora', 'Cancha'];
-  const rows = partidos.map(m => [nombreDe[m.equipoA] || '—', nombreDe[m.equipoB] || '—', fmtFechaPartido(m.fecha) || '—', m.hora || '—', m.cancha || '—']);
-  descargarTablaPDF('Programación — Fecha ' + fecha, headers, rows, 'fecha_' + fecha + '_programacion.pdf');
+  partidos.sort((a, b) => (a.fecha || '').localeCompare(b.fecha || '') || (a.hora || '').localeCompare(b.hora || ''));
+  let lista = partidos.map(m => ({ m, e: estadoPartidoPDF(m, nombreDe) }));
+  const jugados = lista.filter(x => x.e.tipo !== 'pendiente').length;
+  const pendientes = lista.length - jugados;
+  if (soloPendientes) lista = lista.filter(x => x.e.tipo === 'pendiente');
+  if (lista.length === 0) { alert(soloPendientes ? 'Esta fecha ya no tiene partidos por jugar.' : 'No hay partidos en esta fecha.'); return; }
+
+  const { jsPDF } = window.jspdf;
+  const doc = pdfEnMayuscula(new jsPDF());
+  doc.setFontSize(14);
+  doc.text((soloPendientes ? 'Partidos por jugar — Fecha ' : 'Programación — Fecha ') + fecha, 14, 15);
+  doc.setFontSize(10);
+  doc.text(`${jugados} jugado${jugados === 1 ? '' : 's'} · ${pendientes} por jugar`, 14, 21);
+  doc.autoTable({
+    head: [['Local', 'Visitante', 'Día', 'Hora', 'Cancha', 'Estado']],
+    body: lista.map(({ m, e }) => [
+      nombreDe[m.equipoA] || '—', nombreDe[m.equipoB] || '—', fmtFechaPartido(m.fecha) || '—',
+      m.hora || '—', m.cancha || '—', e.texto + (m.observaciones ? '\n' + m.observaciones : '')
+    ]),
+    startY: 25, styles: { fontSize: 9 }, headStyles: { fillColor: [18, 54, 38] },
+    didParseCell: (d) => {
+      if (d.section !== 'body') return;
+      const e = lista[d.row.index].e;
+      if (e.tipo === 'pendiente') {
+        if (d.column.index === 5) { d.cell.styles.fillColor = [227, 243, 232]; d.cell.styles.textColor = [46, 125, 70]; d.cell.styles.fontStyle = 'bold'; }
+      } else {
+        d.cell.styles.textColor = [130, 140, 135];
+        if (d.column.index === 5) { d.cell.styles.fillColor = [238, 241, 238]; d.cell.styles.fontStyle = 'bold'; }
+      }
+    }
+  });
+  doc.save('fecha_' + fecha + (soloPendientes ? '_por_jugar' : '_programacion') + '.pdf');
 }
 
 async function orgResumenHtml() {
@@ -845,7 +886,8 @@ async function orgPartidosHtml() {
     html += `<div class="card">
       <div class="muted" style="margin-bottom:8px">Descargar la programación de una fecha</div>
       <select id="pdf_fecha_sel">${fechas.map(j=>`<option value="${j}">Fecha ${j}</option>`).join('')}</select>
-      <button class="btn-ghost" style="width:100%;margin-top:6px" onclick="descargarProgramacionPDF()">Descargar PDF</button>
+      <button class="btn-ghost" style="width:100%;margin-top:6px" onclick="descargarProgramacionPDF(false)">Descargar PDF completo (jugados y por jugar)</button>
+      <button class="btn-ghost" style="width:100%;margin-top:6px" onclick="descargarProgramacionPDF(true)">Descargar solo los partidos por jugar</button>
     </div>`;
   }
   if (matches.length === 0) html += '<p class="muted">Aún no hay partidos programados.</p>';
