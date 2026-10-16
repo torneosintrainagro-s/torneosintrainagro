@@ -213,6 +213,8 @@ async function iniciarSesionApi(pin, onIntento) {
 const POSITIONS = ['Portero','Defensa','Volante','Delantero'];
 const RH_TYPES = ['O+','O-','A+','A-','B+','B-','AB+','AB-'];
 const CANCHAS = ['Cancha la Agrícola', 'Cancha la Floresta', 'Cancha Unidad Deportiva'];
+// Organizadores que pueden quedar a cargo de un partido (y responsables de cobrar sus tarjetas)
+const ORGANIZADORES = ['CABO (ALBERTO)', 'EVER', 'CLAUDIA'];
 const STATUS = {
   habilitado: {label:'Habilitado', color:'#2E7D46', bg:'#E7F3EA'},
   suspendido: {label:'Suspendido', color:'#B3261E', bg:'#FBEAE9'},
@@ -487,20 +489,20 @@ function descargarProgramacionPDF(soloPendientes) {
   doc.setFontSize(10);
   doc.text(`${jugados} jugado${jugados === 1 ? '' : 's'} · ${pendientes} por jugar`, 14, 21);
   doc.autoTable({
-    head: [['Local', 'Visitante', 'Día', 'Hora', 'Cancha', 'Estado']],
+    head: [['Local', 'Visitante', 'Día', 'Hora', 'Cancha', 'Organizador', 'Estado']],
     body: lista.map(({ m, e }) => [
       nombreDe[m.equipoA] || '—', nombreDe[m.equipoB] || '—', fmtFechaPartido(m.fecha) || '—',
-      m.hora || '—', m.cancha || '—', e.texto + (m.observaciones ? '\n' + m.observaciones : '')
+      m.hora || '—', m.cancha || '—', m.organizador || '—', e.texto + (m.observaciones ? '\n' + m.observaciones : '')
     ]),
     startY: 25, styles: { fontSize: 9 }, headStyles: { fillColor: [18, 54, 38] },
     didParseCell: (d) => {
       if (d.section !== 'body') return;
       const e = lista[d.row.index].e;
       if (e.tipo === 'pendiente') {
-        if (d.column.index === 5) { d.cell.styles.fillColor = [227, 243, 232]; d.cell.styles.textColor = [46, 125, 70]; d.cell.styles.fontStyle = 'bold'; }
+        if (d.column.index === 6) { d.cell.styles.fillColor = [227, 243, 232]; d.cell.styles.textColor = [46, 125, 70]; d.cell.styles.fontStyle = 'bold'; }
       } else {
         d.cell.styles.textColor = [130, 140, 135];
-        if (d.column.index === 5) { d.cell.styles.fillColor = [238, 241, 238]; d.cell.styles.fontStyle = 'bold'; }
+        if (d.column.index === 6) { d.cell.styles.fillColor = [238, 241, 238]; d.cell.styles.fontStyle = 'bold'; }
       }
     }
   });
@@ -758,6 +760,7 @@ function orgPartidoCardHtml(m, nombreDe) {
       <div style="font-weight:600">${esc(m.nombre)}</div>
       <div class="muted">${esc(nombreDe[m.equipoA])} vs ${esc(nombreDe[m.equipoB])}${m.fecha?' · '+fmtFechaPartido(m.fecha):''}${m.hora?' · '+esc(m.hora):''}</div>
       ${m.cancha?`<div class="muted">📍 ${esc(m.cancha)}</div>`:''}
+      ${m.organizador?`<div class="muted">👤 Organizador: ${esc(m.organizador)}</div>`:''}
       ${m.arbitroNombre?`<div class="muted">🧑‍⚖️ ${esc(m.arbitroNombre)}</div>`:''}
       ${m.observaciones?`<div class="muted" style="color:#B8860B;margin-top:4px">⚠ ${esc(m.observaciones)}</div>`:''}
     </div>
@@ -917,6 +920,8 @@ async function orgPartidosHtml() {
     <select id="m_a"><option value="">Equipo local…</option>${teams.map(t=>`<option value="${t.id}">${esc(t.nombre)}</option>`).join('')}</select>
     <select id="m_b"><option value="">Equipo visitante…</option>${teams.map(t=>`<option value="${t.id}">${esc(t.nombre)}</option>`).join('')}</select>
     <select id="m_cancha"><option value="">Elige la cancha…</option>${CANCHAS.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('')}</select>
+    <label class="lbl" for="m_org">Organizador a cargo del partido <span class="req">*</span></label>
+    <select id="m_org"><option value="">Elige el organizador…</option>${ORGANIZADORES.map(o=>`<option value="${esc(o)}">${esc(o)}</option>`).join('')}</select>
     <input id="m_fecha" type="date">
     <input id="m_hora" type="time">
     <div id="m_obs_wrap" style="display:none">
@@ -936,6 +941,7 @@ function abrirMatchForm() {
   document.getElementById('m_a').selectedIndex = 0; document.getElementById('m_a').disabled = false;
   document.getElementById('m_b').selectedIndex = 0; document.getElementById('m_b').disabled = false;
   document.getElementById('m_cancha').selectedIndex = 0;
+  document.getElementById('m_org').value = '';
   document.getElementById('m_fecha').value = '';
   document.getElementById('m_hora').value = '';
   document.getElementById('m_obs').value = '';
@@ -958,6 +964,7 @@ function editarPartidoForm(matchId) {
   document.getElementById('m_a').value = m.equipoA; document.getElementById('m_a').disabled = true;
   document.getElementById('m_b').value = m.equipoB; document.getElementById('m_b').disabled = true;
   document.getElementById('m_cancha').value = m.cancha || '';
+  document.getElementById('m_org').value = ORGANIZADORES.includes(m.organizador) ? m.organizador : '';
   document.getElementById('m_fecha').value = m.fecha || '';
   document.getElementById('m_hora').value = m.hora || '';
   document.getElementById('m_obs').value = '';
@@ -974,18 +981,20 @@ async function submitMatch() {
   const fecha = document.getElementById('m_fecha').value;
   const hora = document.getElementById('m_hora').value;
   const cancha = document.getElementById('m_cancha').value;
+  const organizador = document.getElementById('m_org').value;
   const jornada = document.getElementById('m_jornada').value;
   const a = document.getElementById('m_a').value, b = document.getElementById('m_b').value;
   if (!id && (!jornada || !a || !b || a===b)) return;
+  if (!organizador) { alert('Elige el organizador que va a estar a cargo de este partido.'); return; }
   btn.disabled = true;
   const textoOriginal = btn.textContent;
   btn.textContent = 'Guardando…';
   try {
     if (id) {
       const obs = document.getElementById('m_obs').value.trim();
-      await gsCall('editarPartido', id, fecha, hora, cancha, obs);
+      await gsCall('editarPartido', id, fecha, hora, cancha, obs, organizador);
     } else {
-      await gsCall('addPartido', Number(jornada), fecha, a, b, hora, cancha);
+      await gsCall('addPartido', Number(jornada), fecha, a, b, hora, cancha, organizador);
     }
     renderOrg();
   } catch (e) {
@@ -1120,7 +1129,8 @@ async function verTarjetasEquipo(equipoId) {
   const nombreEquipoDe = {}; teams.forEach(t => nombreEquipoDe[t.id] = t.nombre);
   const nombreJugadorDe = {}; players.forEach(p => nombreJugadorDe[p.id] = '#' + esc(p.numero) + ' ' + esc(p.nombre));
   const nombrePartidoDe = {}; matches.forEach(m => nombrePartidoDe[m.id] = m.nombre);
-  window.__tarjetasData = { tarjetas, teams, nombreEquipoDe, nombreJugadorDe, nombrePartidoDe };
+  const organizadorDe = {}; matches.forEach(m => organizadorDe[m.id] = m.organizador || '');
+  window.__tarjetasData = { tarjetas, teams, nombreEquipoDe, nombreJugadorDe, nombrePartidoDe, organizadorDe };
   const deEquipo = tarjetas.filter(t => String(t.equipoId) === String(equipoId));
   content.innerHTML = `<button class="btn-ghost" onclick="renderOrg()">← Volver a equipos</button>
     <h2 class="bebas" style="margin-top:12px">Amonestaciones — ${esc(nombreEquipoDe[equipoId] || '')}</h2>
@@ -1135,6 +1145,7 @@ function refrescarTarjetas() {
 
 function tarjetasListaHtml(tarjetas) {
   const { nombreEquipoDe, nombreJugadorDe, nombrePartidoDe } = window.__tarjetasData;
+  const organizadorDe = window.__tarjetasData.organizadorDe || {};
   const ordenadas = [...tarjetas].sort((a,b) => new Date(b.ts) - new Date(a.ts));
   if (ordenadas.length === 0) return '<p class="muted">No hay tarjetas para mostrar.</p>';
   return ordenadas.map(t => {
@@ -1147,6 +1158,7 @@ function tarjetasListaHtml(tarjetas) {
         <div style="flex:1">
           <div style="font-weight:600">${nombreJugadorDe[t.jugadorId] || '—'}</div>
           <div class="muted">${esc(nombreEquipoDe[t.equipoId]||'')} · ${esc(nombrePartidoDe[t.matchId]||'')}</div>
+          <div style="font-size:13px;font-weight:600;margin-top:2px;color:${organizadorDe[t.matchId] ? '#123626' : '#B8860B'}">💰 Cobra: ${organizadorDe[t.matchId] ? esc(organizadorDe[t.matchId]) : 'sin organizador asignado'}</div>
         </div>
       </div>
       ${t.observaciones ? `<div style="margin-top:6px;font-size:14px">${esc(t.observaciones)}</div>` : ''}
@@ -1246,6 +1258,7 @@ async function delegatePartidosHtml() {
         <div style="font-weight:600">${esc(m.nombre)}</div>
         <div class="muted">vs ${esc(rival||'—')}${m.fecha?' · '+fmtFechaPartido(m.fecha):''}${m.hora?' · '+esc(m.hora):''}</div>
         ${m.cancha?`<div class="muted">📍 ${esc(m.cancha)}</div>`:''}
+      ${m.organizador?`<div class="muted">👤 Organizador: ${esc(m.organizador)}</div>`:''}
         ${m.observaciones?`<div class="muted" style="color:#B8860B">⚠ ${esc(m.observaciones)}</div>`:''}
       </div>
       ${m.ganadorW
@@ -1562,7 +1575,9 @@ function estadoTarjetaJugador(jugadorId) {
   for (const t of tarjetas) {
     const pagada = t.pagada === true || String(t.pagada).toUpperCase() === 'TRUE';
     if (!pagada) {
-      return { bloqueado: true, motivo: `Tarjeta ${t.tipo} pendiente de pago` };
+      const partidoT = (window.__alMatches || []).find(m => m.id === t.matchId);
+      const cobra = partidoT && partidoT.organizador ? ` (pagar a ${partidoT.organizador})` : '';
+      return { bloqueado: true, motivo: `Tarjeta ${t.tipo} pendiente de pago${cobra}` };
     }
     if (t.tipo === 'roja' && jornadaActual != null && t.jornada !== '' && t.jornada != null) {
       const cardJornada = Number(t.jornada);
