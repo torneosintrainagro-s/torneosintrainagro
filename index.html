@@ -342,7 +342,7 @@ function abrirPanel(res) {
     document.getElementById('whoami').innerHTML = '<button onclick="cerrarSesion()">Organizador · salir</button>';
     renderOrg();
   } else if (res.rol === 'arbitro') {
-    STATE.rol = 'arbitro'; STATE.tab = 'tarjetas';
+    STATE.rol = 'arbitro'; STATE.tab = 'partidos';
     document.getElementById('whoami').innerHTML = '<button onclick="cerrarSesion()">Árbitro · salir</button>';
     renderArbitro();
   } else {
@@ -1023,6 +1023,9 @@ async function verPartido(matchId) {
       <div class="muted">Goles ${esc(teamB.nombre)}</div><div>${golesTeam(teamB.id)||'—'}</div>
     </div>`;
   }
+  if (m.informe) resultadoHtml += `<div style="margin-top:10px;text-align:left;border-top:1px solid #eef1ee;padding-top:8px">
+      <div class="muted">📝 Informe general del árbitro</div>
+      <div style="white-space:pre-wrap;font-size:14px;line-height:1.45">${esc(m.informe)}</div></div>`;
   resultadoHtml += '</div>';
   const blockHtml = async (team, players) => {
     const [lu, cambios] = await Promise.all([
@@ -1702,9 +1705,54 @@ async function enVivoRegistrar(matchId) {
 
 // ================= ÁRBITRO =================
 async function renderArbitro() {
-  app.innerHTML = '<div id="content"></div>';
+  if (STATE.tab !== 'informes') STATE.tab = 'partidos';
+  const tabs = [['partidos', 'Partidos'], ['informes', 'Resumen de informes']];
+  app.innerHTML = '<div id="content"></div>' + tabBarHtml(tabs, STATE.tab, 'renderArbitro');
   const content = document.getElementById('content');
-  content.innerHTML = await arbitroHtml();
+  if (STATE.tab === 'informes') {
+    content.innerHTML = await arbitroInformesHtml();
+    arbitroPintarInformes();
+  } else {
+    content.innerHTML = await arbitroHtml();
+  }
+}
+
+// ---------- Panel "Resumen de informes": los informes generales de los partidos, por fecha ----------
+async function arbitroInformesHtml() {
+  const [matches, teams] = await Promise.all([gsCall('getPartidos'), gsCall('getEquipos')]);
+  const nombreDe = {}; teams.forEach(t => nombreDe[t.id] = t.nombre);
+  window.__infPartidos = matches; window.__infNombreDe = nombreDe;
+  const fechas = [...new Set(matches.map(m => m.jornada).filter(j => j !== '' && j !== undefined && j !== null))].sort((a, b) => Number(a) - Number(b));
+  const ultimaConInforme = [...fechas].reverse().find(j => matches.some(m => String(m.jornada) === String(j) && m.informe));
+  return `<h2 class="bebas">Resumen de informes</h2>
+    <p class="sub">El informe general que escribió el árbitro en cada partido. Elige la fecha o busca una palabra.</p>
+    <select id="ar_inf_fecha" onchange="arbitroPintarInformes()">
+      <option value="">Todas las fechas</option>
+      ${fechas.map(j => `<option value="${esc(j)}" ${String(j) === String(ultimaConInforme) ? 'selected' : ''}>Fecha ${esc(j)}</option>`).join('')}
+    </select>
+    <input type="text" id="ar_inf_buscar" oninput="arbitroPintarInformes()" placeholder="Buscar (equipo, árbitro o palabra del informe)">
+    <div id="ar_inf_lista"></div>`;
+}
+
+function arbitroPintarInformes() {
+  const cont = document.getElementById('ar_inf_lista'); if (!cont) return;
+  const fecha = document.getElementById('ar_inf_fecha').value;
+  const q = document.getElementById('ar_inf_buscar').value.trim().toUpperCase();
+  const nombreDe = window.__infNombreDe || {};
+  let lista = (window.__infPartidos || []).filter(m => m.informe && (!fecha || String(m.jornada) === String(fecha)));
+  if (q) lista = lista.filter(m => [nombreDe[m.equipoA], nombreDe[m.equipoB], m.arbitroNombre, m.informe].join(' ').toUpperCase().includes(q));
+  lista.sort((a, b) => (Number(a.jornada) - Number(b.jornada)) || (a.fecha || '').localeCompare(b.fecha || '') || (a.hora || '').localeCompare(b.hora || ''));
+  if (lista.length === 0) { cont.innerHTML = '<p class="muted">No hay informes para mostrar' + (q ? ' con esa búsqueda.' : ' en esta fecha.') + '</p>'; return; }
+  cont.innerHTML = lista.map(m => {
+    const jugado = m.golesA !== '' && m.golesA !== undefined && m.golesA !== null;
+    return `<div class="card">
+      <div class="muted" style="font-size:13px">Fecha ${esc(m.jornada)}${m.fecha ? ' · ' + fmtFechaPartido(m.fecha) : ''}${m.hora ? ' · ' + esc(m.hora) : ''}${m.cancha ? ' · ' + esc(m.cancha) : ''}</div>
+      <div style="font-weight:600;font-size:16px;margin:4px 0">${esc(nombreDe[m.equipoA] || '—')} ${jugado ? esc(m.golesA) + ' - ' + esc(m.golesB) : 'vs'} ${esc(nombreDe[m.equipoB] || '—')}</div>
+      ${m.arbitroNombre ? `<div class="muted" style="font-size:13px">Árbitro: ${esc(m.arbitroNombre)}</div>` : ''}
+      ${lineaW(m, nombreDe)}
+      <div style="margin-top:8px;padding:10px;border-radius:8px;background:#F7FAF7;border:1px solid #e2e8e3;white-space:pre-wrap;font-size:14px;line-height:1.45">${esc(m.informe)}</div>
+    </div>`;
+  }).join('');
 }
 
 async function arbitroHtml() {
@@ -1835,6 +1883,8 @@ async function arbitroRedibujar() {
     <div class="muted" style="margin:14px 0 6px">Tarjetas de este partido</div>`;
     if (tarjetas.length === 0) html += '<p class="muted">No hubo tarjetas en este partido.</p>';
     tarjetas.slice().reverse().forEach(t => { html += tarjetaCardHtml(t, nombreEquipoDe, nombreJugadorDe); });
+    html += `<div class="muted" style="margin:14px 0 6px">Informe general del partido</div>
+      <div class="card" style="white-space:pre-wrap;font-size:14px;line-height:1.45">${m.informe ? esc(m.informe) : '<span class="muted">Sin informe.</span>'}</div>`;
     body.innerHTML = html;
     return;
   }
@@ -1848,7 +1898,8 @@ async function arbitroRedibujar() {
       golesB: tieneResultado ? String(m.golesB) : '',
       arbitro: m.arbitroNombre || '',
       goles: golesGuardados,
-      tarjetas: []
+      tarjetas: [],
+      informe: m.informe || ''
     };
   }
   window.__arBorrador = b;
@@ -1905,6 +1956,13 @@ async function arbitroRedibujar() {
 
   <div class="muted" style="margin:14px 0 6px">Tarjetas de este partido</div>
   <div id="ar_lista_tarjetas"></div>
+
+  <div class="card" style="margin-top:16px;border:2px solid #123626">
+    <div style="font-weight:600;font-size:16px;margin-bottom:4px">📝 Informe general del partido</div>
+    <p class="muted" style="font-size:13px;margin:0 0 8px">Escribe todo lo que pasó en el partido: incidentes, retiros, demoras, comportamiento de jugadores o público, etc.
+    Puedes usar el micrófono 🎤 del teclado para dictarlo.</p>
+    <textarea id="ar_informe" rows="8" oninput="arCampo('informe', this.value)" placeholder="Informe general del partido…" style="width:100%;padding:12px;border-radius:8px;border:1px solid #d8ded8;font-family:inherit;font-size:16px">${esc(b.informe || '')}</textarea>
+  </div>
 
   <div class="card" style="margin-top:16px;border:2px solid #2E7D46">
     <button class="btn-primary" id="ar_btn_final" style="width:100%;background:#2E7D46;font-size:18px;padding:16px" onclick="arbitroGuardarYFinalizar()">✅ Guardar y finalizar partido</button>
@@ -1999,18 +2057,21 @@ async function arbitroGuardarYFinalizar() {
   if (sumA !== gA) avisos.push(`${teamA.nombre}: el marcador dice ${gA}, pero los goles por jugador suman ${sumA}.`);
   if (sumB !== gB) avisos.push(`${teamB.nombre}: el marcador dice ${gB}, pero los goles por jugador suman ${sumB}.`);
   if (avisos.length && !confirm(avisos.join('\n') + '\n\nSi la diferencia es por un autogol, puedes guardar así.\n¿Guardar de todas formas?')) return;
-  if (!confirm(`Vas a guardar:\n\n${teamA.nombre} ${gA} - ${gB} ${teamB.nombre}\nGoleadores: ${golesLista.length}\nTarjetas nuevas: ${b.tarjetas.length}\n\nDespués de esto el partido queda CERRADO y ya no se puede cambiar.\n¿Guardar y finalizar?`)) return;
+  const informe = String(b.informe || '').trim();
+  if (!informe && !confirm('No escribiste el INFORME GENERAL del partido.\n\n¿Guardar sin informe?')) return;
+  if (!confirm(`Vas a guardar:\n\n${teamA.nombre} ${gA} - ${gB} ${teamB.nombre}\nGoleadores: ${golesLista.length}\nTarjetas nuevas: ${b.tarjetas.length}\nInforme general: ${informe ? 'SÍ' : 'NO'}\n\nDespués de esto el partido queda CERRADO y ya no se puede cambiar.\n¿Guardar y finalizar?`)) return;
 
   btn.disabled = true;
   const textoOriginal = btn.textContent;
   btn.textContent = 'Guardando…';
   try {
-    await gsCall('registrarPartidoCompleto', m.id, { golesA: gA, golesB: gB, arbitroNombre: arbitro, goles: golesLista, tarjetas: b.tarjetas });
+    await gsCall('registrarPartidoCompleto', m.id, { golesA: gA, golesB: gB, arbitroNombre: arbitro, goles: golesLista, tarjetas: b.tarjetas, informe });
     borrarBorrador(m.id);
     window.__arBorrador = null;
     window.__arMatch.finalizado = true;
     window.__arMatch.golesA = gA; window.__arMatch.golesB = gB;
     window.__arMatch.arbitroNombre = arbitro.toUpperCase();
+    window.__arMatch.informe = informe.toUpperCase();
     await arbitroRedibujar();
     alert('✅ Partido guardado y cerrado.');
   } catch (e) {
