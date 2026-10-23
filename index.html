@@ -173,7 +173,7 @@ const LECTURAS = {
   }
 };
 // Acciones que solo leen: no invalidan la foto
-const SOLO_LECTURA = new Set([...Object.keys(LECTURAS), 'verificarPin', 'getTodo', 'iniciarSesion']);
+const SOLO_LECTURA = new Set([...Object.keys(LECTURAS), 'verificarPin', 'getTodo', 'iniciarSesion', 'getDocumentosEquipo']);
 
 function gsCall(fn, ...args) {
   if (LECTURAS[fn] && !SNAP_OFF) {
@@ -246,7 +246,13 @@ function verFoto(url) {
   const box = document.createElement('div');
   box.className = 'lightbox';
   box.onclick = () => box.remove();
-  box.innerHTML = `<img src="${esc(url)}">`;
+  box.style.flexDirection = 'column';
+  box.style.gap = '12px';
+  box.innerHTML = `<img src="${esc(url)}" style="max-height:80vh">
+    <div class="row" style="gap:8px">
+      <a href="${esc(url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" class="btn-ghost" style="background:#fff;text-decoration:none">Abrir en tamaño completo</a>
+      <button class="btn-ghost" style="background:#fff">Cerrar</button>
+    </div>`;
   document.body.appendChild(box);
 }
 
@@ -432,8 +438,8 @@ function descargarResumenPDF() {
   doc.setFontSize(14);
   doc.text('Tabla de posiciones', 14, y);
   doc.autoTable({
-    head: [['#', 'Equipo', 'PJ', 'Pts', 'GF', 'GC', 'DG', 'TA', 'TR']],
-    body: r.posiciones.map((t, i) => [i + 1, t.nombre, t.pj, t.pts, t.gf, t.gc, (t.dg > 0 ? '+' : '') + t.dg, t.ta, t.tr]),
+    head: [['#', 'Equipo', 'PJ', 'PG', 'PE', 'PP', 'GF', 'GC', 'DG', 'Puntos']],
+    body: r.posiciones.map((t, i) => [i + 1, t.nombre, t.pj, t.pg, t.pe, t.pp, t.gf, t.gc, (t.dg > 0 ? '+' : '') + t.dg, t.pts]),
     startY: y + 5, styles: { fontSize: 9 }, headStyles: { fillColor: [18, 54, 38] }
   });
   y = doc.lastAutoTable.finalY + 14;
@@ -517,7 +523,7 @@ async function orgResumenHtml() {
 
   // ---- Tabla de posiciones ----
   const statsDe = {};
-  teams.forEach(t => { statsDe[t.id] = { id: t.id, nombre: t.nombre, pj: 0, pts: 0, gf: 0, gc: 0, ta: 0, tr: 0 }; });
+  teams.forEach(t => { statsDe[t.id] = { id: t.id, nombre: t.nombre, pj: 0, pg: 0, pe: 0, pp: 0, pts: 0, gf: 0, gc: 0, ta: 0, tr: 0 }; });
   matches.forEach(m => {
     const tieneResultado = m.golesA !== '' && m.golesA !== undefined && m.golesA !== null;
     const a = statsDe[m.equipoA], b = statsDe[m.equipoB];
@@ -526,7 +532,7 @@ async function orgResumenHtml() {
       // Ganado por W: 3 puntos al ganador y 0 al otro. Los "3 a 0" NO se suman como goles;
       // solo cuentan los goles reales que el árbitro haya registrado antes del retiro (si los hubo).
       a.pj++; b.pj++;
-      if (String(m.ganadorW) === String(m.equipoA)) a.pts += 3; else b.pts += 3;
+      if (String(m.ganadorW) === String(m.equipoA)) { a.pts += 3; a.pg++; b.pp++; } else { b.pts += 3; b.pg++; a.pp++; }
       if (tieneResultado) {
         const rA = Number(m.golesA) || 0, rB = Number(m.golesB) || 0;
         a.gf += rA; a.gc += rB; b.gf += rB; b.gc += rA;
@@ -538,9 +544,9 @@ async function orgResumenHtml() {
     a.pj++; b.pj++;
     a.gf += gA; a.gc += gB;
     b.gf += gB; b.gc += gA;
-    if (gA > gB) a.pts += 3;
-    else if (gA < gB) b.pts += 3;
-    else { a.pts += 1; b.pts += 1; }
+    if (gA > gB) { a.pts += 3; a.pg++; b.pp++; }
+    else if (gA < gB) { b.pts += 3; b.pg++; a.pp++; }
+    else { a.pts += 1; b.pts += 1; a.pe++; b.pe++; }
   });
   tarjetas.forEach(t => {
     const s = statsDe[t.equipoId];
@@ -576,11 +582,11 @@ async function orgResumenHtml() {
   if (posiciones.length === 0) html += '<p class="muted">Aún no hay equipos inscritos.</p>';
   else {
     html += `<div style="overflow-x:auto"><table class="resumen"><thead><tr>
-      <th>#</th><th>Equipo</th><th>PJ</th><th>Pts</th><th>GF</th><th>GC</th><th>DG</th><th>TA</th><th>TR</th>
+      <th>#</th><th>Equipo</th><th>PJ</th><th>PG</th><th>PE</th><th>PP</th><th>GF</th><th>GC</th><th>DG</th><th>Puntos</th>
     </tr></thead><tbody>` +
-      posiciones.map((t, i) => `<tr><td>${i + 1}</td><td>${esc(t.nombre)}</td><td>${t.pj}</td><td><strong>${t.pts}</strong></td><td>${t.gf}</td><td>${t.gc}</td><td>${t.dg > 0 ? '+' : ''}${t.dg}</td><td><span class="badge" style="color:#7A4E00;background:#FDECC8">${t.ta}</span></td><td><span class="badge" style="color:#B3261E;background:#FBEAE9">${t.tr}</span></td></tr>`).join('') +
+      posiciones.map((t, i) => `<tr><td>${i + 1}</td><td>${esc(t.nombre)}</td><td>${t.pj}</td><td>${t.pg}</td><td>${t.pe}</td><td>${t.pp}</td><td>${t.gf}</td><td>${t.gc}</td><td>${t.dg > 0 ? '+' : ''}${t.dg}</td><td><strong style="color:#123626;font-size:15px">${t.pts}</strong></td></tr>`).join('') +
       '</tbody></table></div>';
-    html += '<p class="muted" style="margin-top:8px">Desempate en este orden: puntos → diferencia de goles → menos tarjetas (amarillas + rojas).</p>';
+    html += '<p class="muted" style="margin-top:8px">PJ: jugados · PG: ganados · PE: empatados · PP: perdidos · GF: goles a favor · GC: goles en contra · DG: diferencia de goles. Desempate: puntos → diferencia de goles → menos tarjetas.</p>';
   }
   html += '</div>';
 
@@ -734,6 +740,7 @@ async function verCarnetsEquipo(equipoId) {
   const [teams, players] = await Promise.all([gsCall('getEquipos'), gsCall('getJugadoresTodos')]);
   const team = teams.find(t => t.id === equipoId);
   const teamPlayers = players.filter(p => p.equipoId === equipoId);
+  try { window.__docsEquipo = await gsCall('getDocumentosEquipo', equipoId) || {}; } catch (e) { window.__docsEquipo = {}; }
   let html = `<button class="btn-ghost" onclick="renderOrg()">← Volver a equipos</button>
     <h2 class="bebas" style="margin-top:12px">Carnets — ${esc(team ? team.nombre : '')}</h2><p class="sub">${teamPlayers.length} jugador(es)</p>`;
   if (teamPlayers.length === 0) html += '<p class="muted">Este equipo aún no tiene jugadores.</p>';
@@ -1202,10 +1209,84 @@ async function orgEliminarTarjeta(id) {
   refrescarTarjetas();
 }
 
+// ---- Requisitos del carnet: cédula, planilla y pago. Con los 3 chulitos se autoriza solo. ----
+const REQUISITOS_CARNET = [['cedula', 'Cédula', 'chkCedula'], ['planilla', 'Planilla', 'chkPlanilla'], ['pago', 'Pago del carnet', 'chkPago']];
+function faltanRequisitos(p) { return REQUISITOS_CARNET.filter(r => !p[r[2]]).map(r => r[1]); }
+
+function requisitosHtml(p) {
+  const faltan = faltanRequisitos(p);
+  return `<div style="margin-top:10px;border-top:1px solid #eef1ee;padding-top:10px">
+    <div style="font-weight:600;font-size:14px;margin-bottom:6px">Requisitos para autorizar</div>
+    <div class="row" style="gap:6px;flex-wrap:wrap">
+      ${REQUISITOS_CARNET.map(([clave, etiqueta, campo]) => `<button class="toggle ${p[campo] ? 'on-s' : ''}" style="padding:10px 12px" onclick="orgMarcarRequisito('${p.id}','${clave}',${!p[campo]}, this)">${p[campo] ? '✓' : '☐'} ${etiqueta}</button>`).join('')}
+    </div>
+    <div style="margin-top:8px;font-size:14px;font-weight:600;color:${faltan.length ? '#B8860B' : '#2E7D46'}">
+      ${faltan.length ? '⏳ Falta: ' + faltan.join(', ') : '✅ Autorizado: tiene los 3 requisitos'}
+    </div>
+  </div>`;
+}
+
+function documentosHtml(p) {
+  const docs = (window.__docsEquipo || {})[p.id] || {};
+  const caja = (tipo, etiqueta) => {
+    const url = docs[tipo];
+    return `<div style="flex:1;min-width:0;text-align:center">
+      <div class="muted" style="font-size:12px;margin-bottom:4px">${etiqueta}</div>
+      <div class="photo ${url ? 'clickable' : ''}" style="width:100%;height:96px" ${url ? `onclick="verFoto('${esc(url)}')"` : ''}>
+        ${url ? `<img src="${esc(url)}">` : '<span class="muted" style="font-size:12px">Sin foto</span>'}
+      </div>
+      <label class="btn-ghost" style="display:block;margin-top:6px;padding:8px;font-size:13px">${url ? 'Cambiar' : 'Subir'} foto
+        <input type="file" accept="image/*" style="display:none" onchange="orgSubirDocumento('${p.id}','${tipo}',this.files[0],this)">
+      </label>
+    </div>`;
+  };
+  return `<div style="margin-top:10px;border-top:1px solid #eef1ee;padding-top:10px">
+    <div style="font-weight:600;font-size:14px;margin-bottom:6px">Documentos <span class="muted" style="font-weight:400;font-size:12px">(solo los ve el organizador · toca la foto para verla en grande)</span></div>
+    <div class="row" style="gap:10px;align-items:flex-start">${caja('cedula', 'Cédula')}${caja('planilla', 'Planilla')}</div>
+  </div>`;
+}
+
+// Marca o quita un requisito y vuelve a dibujar solo ese carnet
+async function orgMarcarRequisito(jugadorId, requisito, valor, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+  try {
+    await gsCall('marcarRequisito', jugadorId, requisito, valor);
+    await orgRedibujarCarnet(jugadorId);
+  } catch (e) {
+    alert(e && e.message ? e.message : 'No se pudo guardar.');
+    await orgRedibujarCarnet(jugadorId);
+  }
+}
+
+async function orgSubirDocumento(jugadorId, tipo, file, input) {
+  if (!file) return;
+  const label = input && input.parentElement;
+  const textoOriginal = label ? label.firstChild.textContent : '';
+  if (label) label.firstChild.textContent = 'Subiendo… ';
+  try {
+    // Las fotos de documentos se guardan más grandes y nítidas que la foto del carnet, para poder leerlas
+    const foto = await resizeImage(file, 1600, 0.8);
+    const r = await gsCall('subirDocumento', jugadorId, tipo, foto);
+    window.__docsEquipo = window.__docsEquipo || {};
+    window.__docsEquipo[jugadorId] = Object.assign({}, window.__docsEquipo[jugadorId], { [tipo]: r && r.url ? r.url : '' });
+    await orgRedibujarCarnet(jugadorId);
+  } catch (e) {
+    if (label) label.firstChild.textContent = textoOriginal;
+    alert(e && e.message ? e.message : 'No se pudo subir la foto.');
+  }
+}
+
+async function orgRedibujarCarnet(jugadorId) {
+  const players = await gsCall('getJugadoresTodos');
+  const p = players.find(x => x.id === jugadorId);
+  const viejo = document.getElementById('carnet_' + jugadorId);
+  if (p && viejo) viejo.outerHTML = playerCardHtml(p, null, true);
+}
+
 function playerCardHtml(p, equipoNombre, orgView) {
   const st = STATUS[p.estado] || STATUS.habilitado;
   const autorizado = p.autorizado === true || String(p.autorizado).toUpperCase() === 'TRUE';
-  return `<div class="card" style="padding:12px">
+  return `<div class="card" style="padding:12px" id="carnet_${p.id}">
     <div class="row">
       <div class="photo ${p.fotoUrl?'clickable':''}" ${p.fotoUrl?`onclick="verFoto('${esc(p.fotoUrl)}')"`:''}>${p.fotoUrl ? `<img src="${esc(p.fotoUrl)}">` : ''}</div>
       <div style="flex:1;min-width:0">
@@ -1221,8 +1302,7 @@ function playerCardHtml(p, equipoNombre, orgView) {
       ${p.refuerzo ? '<span class="badge" style="color:#0B5FA5;background:#E3EEFB">Refuerzo</span>' : ''}
       ${autorizado ? '<span class="badge" style="color:#2E7D46;background:#E3F3E8">Autorizado</span>' : '<span class="badge" style="color:#B8860B;background:#FBF3DC">Pendiente de autorización</span>'}
     </div>
-    ${orgView && !autorizado ? `<button class="btn-primary" style="margin-top:10px;width:100%" onclick="orgAutorizarJugador('${p.id}')">Autorizar jugador</button>` : ''}
-    ${orgView && autorizado ? `<button class="btn-ghost" style="margin-top:10px;width:100%" onclick="orgRevocarAutorizacion('${p.id}')">Revocar autorización</button>` : ''}
+    ${orgView ? requisitosHtml(p) + documentosHtml(p) : ''}
   </div>`;
 }
 
@@ -1388,6 +1468,7 @@ function planillaFilaHtml(p) {
         ${p.cuarenton ? '<span class="badge" style="color:#7A4E00;background:#FDECC8">Cuarentón</span>' : ''}
         ${p.refuerzo ? '<span class="badge" style="color:#0B5FA5;background:#E3EEFB">Refuerzo</span>' : ''}
         ${autorizado ? '<span class="badge" style="color:#2E7D46;background:#E3F3E8">Autorizado</span>' : '<span class="badge" style="color:#B8860B;background:#FBF3DC">Pendiente de autorización</span>'}
+        ${!autorizado && faltanRequisitos(p).length ? `<div style="margin-top:6px;font-size:13px;font-weight:600;color:#B8860B">Falta: ${faltanRequisitos(p).join(', ')}</div>` : ''}
       </div>
       <div class="row" style="gap:8px;flex-wrap:wrap">
         <button class="btn-ghost" onclick="event.stopPropagation(); editPlayer('${p.id}')">Editar</button>
