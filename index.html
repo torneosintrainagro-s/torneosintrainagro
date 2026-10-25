@@ -233,6 +233,26 @@ function lineaW(m, nombreDe) {
   </div>`;
 }
 
+// ===================== SUSPENSIÓN POR ROJA =====================
+// "N fechas de suspensión" = el jugador NO juega las N fechas siguientes a la de la roja.
+// Ej.: roja en la fecha 2 con 2 fechas de sanción → no juega la 3 ni la 4 → vuelve en la fecha 5.
+function infoSancion(t) {
+  const sancion = Number(t.jornadasSancion);
+  const fechaRoja = Number(t.jornada);
+  if (t.jornadasSancion === '' || t.jornadasSancion === null || t.jornadasSancion === undefined || isNaN(sancion)) return null;
+  if (!fechaRoja) return null;
+  if (sancion <= 0) return { sancion: 0, vuelve: fechaRoja + 1, texto: 'Sin fechas de suspensión' };
+  const desde = fechaRoja + 1, hasta = fechaRoja + sancion;
+  return { sancion, desde, hasta, vuelve: hasta + 1,
+    texto: sancion === 1 ? `No juega la fecha ${desde}` : `No juega de la fecha ${desde} a la ${hasta}` };
+}
+function sancionHtml(t) {
+  const s = infoSancion(t);
+  if (!s) return '';
+  return `<div style="margin-top:6px;font-size:13px;color:#B3261E">Suspensión: ${s.sancion} fecha${s.sancion === 1 ? '' : 's'} · ${esc(s.texto)}</div>
+    <div style="margin-top:2px;font-size:14px;font-weight:700;color:#2E7D46">✅ Puede volver a jugar en la FECHA ${s.vuelve}</div>`;
+}
+
 function fmtTime(iso){ try { const d=new Date(iso); return d.toLocaleString('es-CO',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}); } catch(e){ return iso; } }
 // Ojo: el 0 es un valor válido (por ejemplo, un marcador 1 - 0). Antes, (s||'') convertía el 0 en vacío.
 function esc(s){ return (s === null || s === undefined ? '' : String(s)).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
@@ -1169,7 +1189,7 @@ function tarjetasListaHtml(tarjetas) {
         </div>
       </div>
       ${t.observaciones ? `<div style="margin-top:6px;font-size:14px">${esc(t.observaciones)}</div>` : ''}
-      ${tieneSancion ? `<div style="margin-top:6px;font-size:13px;color:#B3261E">Suspensión: ${esc(t.jornadasSancion)} fecha${Number(t.jornadasSancion)===1?'':'s'} desde la fecha ${esc(t.jornada||'—')}</div>` : ''}
+      ${tieneSancion ? sancionHtml(t) : (t.tipo === 'roja' ? '<div style="margin-top:6px;font-size:13px;font-weight:600;color:#B8860B">⚠️ Falta fijar las fechas de suspensión (mientras tanto el jugador no puede alinearse)</div>' : '')}
       ${t.tipo === 'roja' ? `<div class="row" style="margin-top:8px;align-items:center;gap:6px">
         <input type="number" min="0" id="sancion_${t.id}" placeholder="Fechas de suspensión" value="${tieneSancion?esc(t.jornadasSancion):''}" style="flex:1;margin:0">
         <button class="btn-ghost" onclick="orgGuardarSancion('${t.id}')">${tieneSancion?'Actualizar':'Fijar sanción'}</button>
@@ -1660,12 +1680,13 @@ function estadoTarjetaJugador(jugadorId) {
       const cobra = partidoT && partidoT.organizador ? ` (pagar a ${partidoT.organizador})` : '';
       return { bloqueado: true, motivo: `Tarjeta ${t.tipo} pendiente de pago${cobra}` };
     }
-    if (t.tipo === 'roja' && jornadaActual != null && t.jornada !== '' && t.jornada != null) {
-      const cardJornada = Number(t.jornada);
-      const sancion = Number(t.jornadasSancion) || 0;
-      const bloqueadoHasta = cardJornada + sancion - 1;
-      if (sancion > 0 && jornadaActual > cardJornada && jornadaActual <= bloqueadoHasta) {
-        return { bloqueado: true, motivo: `Suspendido por roja hasta que pase la fecha ${bloqueadoHasta}` };
+    if (t.tipo === 'roja' && jornadaActual != null && t.jornada !== '' && t.jornada != null && jornadaActual > Number(t.jornada)) {
+      const s = infoSancion(t);
+      if (!s) {
+        return { bloqueado: true, motivo: 'Roja sin fechas de suspensión fijadas por el organizador' };
+      }
+      if (s.sancion > 0 && jornadaActual <= s.hasta) {
+        return { bloqueado: true, motivo: `Suspendido por roja: ${s.texto}. Vuelve a jugar en la fecha ${s.vuelve}` };
       }
     }
   }
@@ -1712,8 +1733,12 @@ function alToggle(kind, id, matchId, confirmed) {
 async function alConfirmar(matchId) {
   const matches = await gsCall('getPartidos');
   const m = matches.find(x => x.id === matchId);
-  await gsCall('guardarAlineacion', matchId, STATE.team.id, alTitulares, alSuplentes, STATE.team.nombre, m.nombre);
-  alineacionRedibujar(matchId, true);
+  try {
+    await gsCall('guardarAlineacion', matchId, STATE.team.id, alTitulares, alSuplentes, STATE.team.nombre, m.nombre);
+    alineacionRedibujar(matchId, true);
+  } catch (e) {
+    alert(e && e.message ? e.message : 'No se pudo guardar la alineación.');
+  }
 }
 
 async function enVivoRender(content) {
@@ -2274,7 +2299,7 @@ function tarjetaCardHtml(t, nombreEquipoDe, nombreJugadorDe) {
       </div>
     </div>
     ${t.observaciones ? `<div style="margin-top:6px;font-size:14px">${esc(t.observaciones)}</div>` : ''}
-    ${t.tipo === 'roja' && t.jornadasSancion ? `<div style="margin-top:6px;font-size:13px;color:#B3261E">Suspensión: ${esc(t.jornadasSancion)} fecha${Number(t.jornadasSancion)===1?'':'s'} desde la fecha ${esc(t.jornada||'—')}</div>` : ''}
+    ${t.tipo === 'roja' ? sancionHtml(t) : ''}
     <div style="margin-top:8px">${pagada
       ? '<span class="badge" style="color:#2E7D46;background:#E3F3E8">Pagada</span>'
       : '<span class="badge" style="color:#8a978d;background:#eef1ee">Pendiente de pago</span>'}</div>
