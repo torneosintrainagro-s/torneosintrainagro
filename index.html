@@ -636,7 +636,8 @@ async function orgResumenHtml() {
 }
 
 async function orgEquiposHtml() {
-  const [teams, players] = await Promise.all([gsCall('getEquipos'), gsCall('getJugadoresTodos')]);
+  const [teams, todos] = await Promise.all([gsCall('getEquipos'), gsCall('getJugadoresTodos')]);
+  const players = todos.filter(p => p.eliminado !== true);
   const countDe = {};
   players.forEach(p => { countDe[p.equipoId] = (countDe[p.equipoId] || 0) + 1; });
   window.__teamsData = {};
@@ -730,7 +731,8 @@ async function regenerarPin(equipoId) {
 }
 
 async function orgCarnetsHtml() {
-  const [teams, players] = await Promise.all([gsCall('getEquipos'), gsCall('getJugadoresTodos')]);
+  const [teams, todos] = await Promise.all([gsCall('getEquipos'), gsCall('getJugadoresTodos')]);
+  const players = todos.filter(p => p.eliminado !== true);
   const countDe = {}, pendDe = {};
   players.forEach(p => {
     countDe[p.equipoId] = (countDe[p.equipoId] || 0) + 1;
@@ -759,7 +761,7 @@ async function verCarnetsEquipo(equipoId) {
   window.__currentOrgTeamId = equipoId;
   const [teams, players] = await Promise.all([gsCall('getEquipos'), gsCall('getJugadoresTodos')]);
   const team = teams.find(t => t.id === equipoId);
-  const teamPlayers = players.filter(p => p.equipoId === equipoId);
+  const teamPlayers = players.filter(p => p.equipoId === equipoId && p.eliminado !== true);
   try { window.__docsEquipo = await gsCall('getDocumentosEquipo', equipoId) || {}; } catch (e) { window.__docsEquipo = {}; }
   let html = `<button class="btn-ghost" onclick="renderOrg()">← Volver a equipos</button>
     <h2 class="bebas" style="margin-top:12px">Carnets — ${esc(team ? team.nombre : '')}</h2><p class="sub">${teamPlayers.length} jugador(es)</p>`;
@@ -1377,7 +1379,7 @@ async function delegatePartidosHtml() {
 // (titular o suplente). No usa fotos a propósito, para que cargue rápido con equipos grandes.
 async function asistenciaHtml(misPartidos) {
   const jugados = misPartidos.filter(m => m.golesA !== '' && m.golesA !== undefined && m.golesA !== null);
-  const players = await gsCall('getJugadores', STATE.team.id);
+  const players = (await gsCall('getJugadores', STATE.team.id)).filter(p => p.eliminado !== true);
   const conteo = {}; players.forEach(p => { conteo[p.id] = 0; });
   for (const m of jugados) {
     const lu = await gsCall('getAlineacion', m.id, STATE.team.id);
@@ -1517,7 +1519,7 @@ function planillaToggle(id) {
 }
 
 async function planillaHtml() {
-  const players = await gsCall('getJugadores', STATE.team.id);
+  const players = (await gsCall('getJugadores', STATE.team.id)).filter(p => p.eliminado !== true);
   const estaActivo = p => p.activo !== false;
   const activos = players.filter(estaActivo);
   const deshabilitados = players.filter(p => !estaActivo(p));
@@ -1638,8 +1640,15 @@ async function savePlayer() {
   }
 }
 async function removePlayer(id) {
-  await gsCall('eliminarJugador', id);
-  renderDelegate();
+  const players = await gsCall('getJugadores', STATE.team.id);
+  const p = players.find(x => x.id === id);
+  if (!confirm(`¿Eliminar el carnet de ${p ? '#' + p.numero + ' ' + p.nombre : 'este jugador'}?\n\nSale de la planilla y su número queda libre para otro jugador.`)) return;
+  try {
+    await gsCall('eliminarJugador', id);
+    renderDelegate();
+  } catch (e) {
+    alert(e && e.message ? e.message : 'No se pudo eliminar el carnet.');
+  }
 }
 
 async function alineacionRender(content) {
