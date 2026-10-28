@@ -268,7 +268,8 @@ function verFoto(url) {
   box.onclick = () => box.remove();
   box.style.flexDirection = 'column';
   box.style.gap = '12px';
-  box.innerHTML = `<img src="${esc(url)}" style="max-height:80vh">
+  // La foto se muestra GRANDE: ocupa casi todo el ancho de la pantalla (hasta 700 px) sin deformarse
+  box.innerHTML = `<img src="${esc(url)}" style="width:min(94vw,700px);height:auto;max-height:82vh;object-fit:contain;border-radius:12px;background:#000">
     <div class="row" style="gap:8px">
       <a href="${esc(url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" class="btn-ghost" style="background:#fff;text-decoration:none">Abrir en tamaño completo</a>
       <button class="btn-ghost" style="background:#fff">Cerrar</button>
@@ -1590,7 +1591,7 @@ async function editPlayer(id) {
 }
 async function onPhotoChosen(file) {
   if (!file) return;
-  currentPhoto = await resizeImage(file);
+  currentPhoto = await resizeImage(file, 800, 0.8);
   document.getElementById('photoPreview').innerHTML = `<img src="${currentPhoto}">`;
 }
 async function savePlayer() {
@@ -1953,9 +1954,63 @@ function arCampo(campo, valor) {
   guardarBorrador();
 }
 
-// Bloque de goles de UN equipo: el nombre del equipo va grande, en una franja de color,
-// y los jugadores quedan dentro de un recuadro con el mismo color. Local en verde, visitante en azul,
-// para que al bajar se note claramente cuándo se pasa de un equipo al otro.
+// ---------- Registro de goles y tarjetas: todo en la misma fila de cada jugador ----------
+// Cada jugador: foto · número y nombre · GOLES · 🟨 AMARILLA · 🟥 ROJA.
+// - Amarilla: se toca y queda marcada (se vuelve a tocar para quitarla).
+// - Roja: se toca y se abre debajo el cuadro "Motivo de la roja" (Listo / Quitar roja).
+// - Doble amarilla: se marca la amarilla Y la roja, con el motivo "DOBLE AMARILLA".
+// Las tarjetas que ya estaban guardadas antes (si el organizador reabrió el partido) salen marcadas y bloqueadas.
+const SILUETA_JUGADOR = '<svg width="42" height="42" viewBox="0 0 42 42"><circle cx="21" cy="16" r="8" fill="#9db3a2"/><rect x="9" y="27" width="24" height="14" rx="7" fill="#9db3a2"/></svg>';
+
+function arTarjetaBorrador(jugadorId, tipo) {
+  const b = window.__arBorrador;
+  return b ? (b.tarjetas || []).find(t => t.jugadorId === jugadorId && t.tipo === tipo) : null;
+}
+function arTarjetaGuardada(jugadorId, tipo) {
+  return (window.__arTarjetasGuardadas || []).find(t => t.jugadorId === jugadorId && t.tipo === tipo) || null;
+}
+
+function filaArbitroHtml(p, golDe, bloqueado) {
+  const guardAm = arTarjetaGuardada(p.id, 'amarilla'), guardRo = arTarjetaGuardada(p.id, 'roja');
+  const nuevaAm = bloqueado ? null : arTarjetaBorrador(p.id, 'amarilla');
+  const nuevaRo = bloqueado ? null : arTarjetaBorrador(p.id, 'roja');
+  const am = !!(guardAm || nuevaAm), ro = !!(guardRo || nuevaRo);
+  const fijaAm = bloqueado || !!guardAm, fijaRo = bloqueado || !!guardRo;   // ya guardadas: no se pueden quitar aquí
+  const abierta = !bloqueado && window.__arRojaAbierta === p.id && nuevaRo;
+  const motivo = (nuevaRo && nuevaRo.observaciones) || (guardRo && guardRo.observaciones) || '';
+  const caja = (marcada, color, borde, fondoOn, textoOn, fija, accion) =>
+    `<div ${fija ? '' : `onclick="${accion}"`} style="width:42px;height:42px;flex-shrink:0;border-radius:8px;border:2px solid ${marcada ? borde : color};
+      background:${marcada ? fondoOn : '#fff'};color:${textoOn};display:flex;align-items:center;justify-content:center;font-weight:700;
+      cursor:${fija ? 'default' : 'pointer'};opacity:${fija && !bloqueado ? .75 : 1}">${marcada ? '✓' : ''}</div>`;
+  let h = `<div id="fila_ar_${p.id}" style="padding:8px 0;border-bottom:1px solid rgba(0,0,0,.07)">
+    <div class="row" style="align-items:center;gap:8px">
+      <div class="photo ${p.fotoUrl ? 'clickable' : ''}" style="width:42px;height:42px;border-radius:50%" ${p.fotoUrl ? `onclick="verFoto('${esc(p.fotoUrl)}')"` : ''}>
+        ${p.fotoUrl ? `<img src="${esc(p.fotoUrl)}" loading="lazy">` : SILUETA_JUGADOR}
+      </div>
+      <div style="flex:1;min-width:0;font-size:13px;font-weight:600;line-height:1.25">#${esc(p.numero)} ${esc(p.nombre)}</div>
+      <input type="number" min="0" inputmode="numeric" id="gol_${p.id}" value="${golDe[p.id] || ''}" placeholder="0"
+        ${bloqueado ? 'disabled' : `oninput="arGol('${p.id}', this.value)"`} style="width:46px;height:42px;flex-shrink:0;text-align:center;margin:0;padding:4px;background:#fff">
+      ${caja(am, '#e0c25a', '#C9A000', '#F5C518', '#5a4500', fijaAm, `arToggleAmarilla('${p.id}')`)}
+      ${caja(ro, '#e59a9a', '#9e1c1c', '#D32F2F', '#fff', fijaRo, `arToggleRoja('${p.id}')`)}
+    </div>`;
+  if (abierta) {
+    h += `<div style="margin:8px 0 2px 50px;padding:10px;border-radius:10px;background:#FBEAE9;border:1px solid #f0b8b4">
+      <div style="font-size:12px;font-weight:700;color:#B3261E;margin-bottom:6px">🟥 Motivo de la roja</div>
+      <textarea id="motivo_${p.id}" rows="2" oninput="arMotivoRoja('${p.id}', this.value)" placeholder="Ej: agresión, doble amarilla, insulto al árbitro…"
+        style="width:100%;padding:8px;border-radius:8px;border:1px solid #e3b6b2;font-family:inherit;font-size:16px">${esc(motivo)}</textarea>
+      <div class="row" style="gap:8px;margin-top:6px">
+        <button class="btn-primary" style="background:#B3261E;padding:8px 14px;font-size:14px" onclick="arCerrarRoja('${p.id}')">Listo</button>
+        <button class="btn-ghost" style="padding:8px 14px;font-size:14px" onclick="arQuitarRoja('${p.id}')">Quitar roja</button>
+      </div>
+    </div>`;
+  } else if (ro) {
+    h += `<div style="margin:4px 0 0 50px;font-size:12px;color:#B3261E">🟥 Motivo: ${motivo ? esc(motivo) : '<strong>falta escribir el motivo</strong>'}
+      ${!fijaRo ? ` · <u style="cursor:pointer" onclick="arAbrirRoja('${p.id}')">editar</u>` : (guardRo && !bloqueado ? ' · ya guardada' : '')}</div>`;
+  }
+  if (guardAm && !bloqueado) h += `<div style="margin:2px 0 0 50px;font-size:12px;color:#7A4E00">🟨 Amarilla ya guardada antes</div>`;
+  return h + '</div>';
+}
+
 function bloqueGolesEquipo(team, players, etiqueta, color, fondo, golDe, bloqueado) {
   const activos = players.filter(p => p.activo !== false);
   return `<div style="border:2px solid ${color};border-radius:12px;overflow:hidden;margin:12px 0;background:${fondo}">
@@ -1963,14 +2018,74 @@ function bloqueGolesEquipo(team, players, etiqueta, color, fondo, golDe, bloquea
       <div style="font-size:12px;font-weight:600;letter-spacing:.08em;opacity:.85">${etiqueta} · ${activos.length} jugador${activos.length===1?'':'es'}</div>
       <div class="bebas" style="font-size:30px;line-height:1.05">${esc(team.nombre)}</div>
     </div>
-    <div style="padding:10px 12px 4px">
-      ${activos.length === 0 ? '<p class="muted" style="margin:0 0 8px">Este equipo no tiene jugadores habilitados.</p>' : ''}
-      ${activos.map(p => `<div class="row" style="align-items:center;margin-bottom:6px">
-        <div style="flex:1;font-size:14px">#${esc(p.numero)} ${esc(p.nombre)}</div>
-        <input type="number" min="0" inputmode="numeric" id="gol_${p.id}" value="${golDe[p.id]||''}" placeholder="0" ${bloqueado ? 'disabled' : `oninput="arGol('${p.id}', this.value)"`} style="width:60px;text-align:center;margin:0;background:#fff">
-      </div>`).join('')}
+    <div style="padding:4px 12px 8px">
+      ${activos.length === 0 ? '<p class="muted" style="margin:8px 0">Este equipo no tiene jugadores habilitados.</p>' : `
+      <div class="row" style="gap:8px;padding:6px 0 4px;border-bottom:2px solid #c7d2c9;font-size:11px;font-weight:700;color:#5b6b62">
+        <div style="width:42px;flex-shrink:0"></div><div style="flex:1">Jugador</div>
+        <div style="width:46px;flex-shrink:0;text-align:center">Goles</div>
+        <div style="width:42px;flex-shrink:0;text-align:center">🟨<br>Amar.</div>
+        <div style="width:42px;flex-shrink:0;text-align:center">🟥<br>Roja</div>
+      </div>`}
+      ${activos.map(p => filaArbitroHtml(p, golDe, bloqueado)).join('')}
     </div>
   </div>`;
+}
+
+// Vuelve a dibujar SOLO la fila de ese jugador (los goles ya escritos no se pierden)
+function arRepintarFila(jugadorId) {
+  const viejo = document.getElementById('fila_ar_' + jugadorId);
+  const p = (window.__arJugadoresPartido || []).find(x => x.id === jugadorId);
+  const b = window.__arBorrador;
+  if (viejo && p && b) viejo.outerHTML = filaArbitroHtml(p, b.goles || {}, false);
+}
+
+function arToggleAmarilla(jugadorId) {
+  const b = window.__arBorrador; if (!b) return;
+  if (arTarjetaGuardada(jugadorId, 'amarilla')) return;
+  const ya = arTarjetaBorrador(jugadorId, 'amarilla');
+  if (ya) b.tarjetas = b.tarjetas.filter(t => t !== ya);
+  else b.tarjetas.push({ id: idTarjetaNueva(), equipoId: (window.__arEquipoDeJugador || {})[jugadorId], jugadorId, tipo: 'amarilla', observaciones: '' });
+  guardarBorrador();
+  arRepintarFila(jugadorId);
+}
+
+function arToggleRoja(jugadorId) {
+  const b = window.__arBorrador; if (!b) return;
+  if (arTarjetaGuardada(jugadorId, 'roja')) return;
+  if (!arTarjetaBorrador(jugadorId, 'roja')) {
+    b.tarjetas.push({ id: idTarjetaNueva(), equipoId: (window.__arEquipoDeJugador || {})[jugadorId], jugadorId, tipo: 'roja', observaciones: '' });
+    guardarBorrador();
+  }
+  arAbrirRoja(jugadorId);
+}
+
+function arAbrirRoja(jugadorId) {
+  const anterior = window.__arRojaAbierta;
+  window.__arRojaAbierta = jugadorId;
+  if (anterior && anterior !== jugadorId) arRepintarFila(anterior);
+  arRepintarFila(jugadorId);
+  const t = document.getElementById('motivo_' + jugadorId); if (t) t.focus();
+}
+
+function arMotivoRoja(jugadorId, valor) {
+  const r = arTarjetaBorrador(jugadorId, 'roja'); if (!r) return;
+  r.observaciones = String(valor || '').toUpperCase();
+  guardarBorrador();
+}
+
+function arCerrarRoja(jugadorId) {
+  const r = arTarjetaBorrador(jugadorId, 'roja');
+  if (r && !String(r.observaciones || '').trim()) { alert('Escribe el motivo de la roja (por ejemplo: DOBLE AMARILLA).'); return; }
+  window.__arRojaAbierta = null;
+  arRepintarFila(jugadorId);
+}
+
+function arQuitarRoja(jugadorId) {
+  const b = window.__arBorrador; if (!b) return;
+  b.tarjetas = b.tarjetas.filter(t => !(t.jugadorId === jugadorId && t.tipo === 'roja'));
+  guardarBorrador();
+  window.__arRojaAbierta = null;
+  arRepintarFila(jugadorId);
 }
 
 async function arbitroRedibujar() {
@@ -1984,6 +2099,8 @@ async function arbitroRedibujar() {
   window.__arNombreEquipoDeT = nombreEquipoDe;
   window.__arEquipoDeJugador = equipoDeJugador;
   window.__arTarjetasGuardadas = tarjetas;
+  window.__arJugadoresPartido = [...playersA, ...playersB];
+  window.__arRojaAbierta = null;
   const finalizado = m.finalizado === true || String(m.finalizado).toUpperCase() === 'TRUE';
   const tieneResultado = m.golesA !== '' && m.golesA !== undefined && m.golesA !== null;
   const golesGuardados = {}; goles.forEach(g => { if (Number(g.goles) > 0) golesGuardados[g.jugadorId] = Number(g.goles); });
@@ -2006,7 +2123,7 @@ async function arbitroRedibujar() {
       ${m.arbitroNombre ? `<div class="muted" style="margin-top:6px">Árbitro: ${esc(m.arbitroNombre)}</div>` : ''}
       ${lineaW(m, nombreEquipoDe)}
     </div>
-    <div class="card"><div class="muted" style="margin-bottom:4px">Goles por jugador</div>
+    <div class="card"><div style="font-weight:700;font-size:15px;margin-bottom:2px">⚽ Registro de goles y tarjetas</div>
       ${bloqueGolesEquipo(teamA, playersA, 'LOCAL', '#123626', '#EEF3ED', golesGuardados, true)}
       ${bloqueGolesEquipo(teamB, playersB, 'VISITANTE', '#0B5FA5', '#EAF2FB', golesGuardados, true)}
     </div>
@@ -2036,7 +2153,7 @@ async function arbitroRedibujar() {
   guardarBorrador();
 
   html += `<div class="card" style="background:#FBF3DC;font-size:14px">
-    📝 Llena el marcador, los goles por jugador y las tarjetas. <strong>Nada se guarda hasta que toques el botón verde del final</strong>,
+    📝 Llena el marcador, los goles y las tarjetas de cada jugador, y el informe. <strong>Nada se guarda hasta que toques el botón verde del final</strong>,
     "Guardar y finalizar partido". Lo que escribas queda guardado en este celular, aunque se vaya el internet.
   </div>
 
@@ -2057,35 +2174,11 @@ async function arbitroRedibujar() {
   </div>
 
   <div class="card">
-    <div class="muted" style="margin-bottom:4px">Goles por jugador</div>
+    <div style="font-weight:700;font-size:15px;margin-bottom:2px">⚽ Registro de goles y tarjetas</div>
+    <div class="muted" style="font-size:12px">Escribe los goles y toca 🟨 o 🟥 al lado de cada jugador. Si es doble amarilla, marca la amarilla y la roja, y en el motivo escribe "DOBLE AMARILLA".</div>
     ${bloqueGolesEquipo(teamA, playersA, 'LOCAL', '#123626', '#EEF3ED', b.goles, false)}
     ${bloqueGolesEquipo(teamB, playersB, 'VISITANTE', '#0B5FA5', '#EAF2FB', b.goles, false)}
   </div>
-
-  <div class="card">
-    <div class="muted" style="margin-bottom:8px">Agregar amonestación</div>
-    <input type="hidden" id="ar_tipo" value="amarilla">
-    <div class="row" style="gap:8px;margin-bottom:10px">
-      <button id="ar_tipo_amarilla" class="btn-ghost" style="flex:1" onclick="arElegirTipo('amarilla')">🟨 Amarilla</button>
-      <button id="ar_tipo_roja" class="btn-ghost" style="flex:1" onclick="arElegirTipo('roja')">🟥 Roja</button>
-    </div>
-    <select id="ar_equipo" onchange="arbitroCargarJugadores()">
-      <option value="">Elige el equipo…</option>
-      <option value="${teamA.id}">${esc(teamA.nombre)}</option>
-      <option value="${teamB.id}">${esc(teamB.nombre)}</option>
-    </select>
-    <div class="muted" id="ar_jug_titulo" style="margin:4px 0 6px">Jugadores (toca todos los que recibieron amarilla)</div>
-    <input type="hidden" id="ar_jugador" value="">
-    <div id="ar_jugador_lista" class="muted" style="margin-bottom:10px">Elige primero el equipo…</div>
-    <div id="ar_obs_wrap" style="display:none">
-      <p class="muted" style="margin:4px 0 6px;font-size:13px">Escribe el motivo de la roja. El organizador decide después cuántas fechas de suspensión lleva.</p>
-      <textarea id="ar_obs" rows="3" placeholder="Observaciones (motivo, detalle de la falta, etc.)" style="width:100%;padding:12px;border-radius:8px;border:1px solid #d8ded8;font-family:inherit;font-size:16px;margin-bottom:8px"></textarea>
-    </div>
-    <button class="btn-ghost" id="ar_btn_agregar" style="width:100%" onclick="arbitroAgregarTarjeta()">+ Agregar a la lista</button>
-  </div>
-
-  <div class="muted" style="margin:14px 0 6px">Tarjetas de este partido</div>
-  <div id="ar_lista_tarjetas"></div>
 
   <div class="card" style="margin-top:16px;border:2px solid #123626">
     <div style="font-weight:600;font-size:16px;margin-bottom:4px">📝 Informe general del partido</div>
@@ -2101,9 +2194,6 @@ async function arbitroRedibujar() {
   </div>`;
 
   body.innerHTML = html;
-  window.__arSeleccion = [];
-  arElegirTipo('amarilla');
-  arPintarTarjetas();
 }
 
 // Pinta solo la lista de tarjetas (no toca el marcador ni los goles que ya están escritos)
@@ -2187,9 +2277,17 @@ async function arbitroGuardarYFinalizar() {
   if (sumA !== gA) avisos.push(`${teamA.nombre}: el marcador dice ${gA}, pero los goles por jugador suman ${sumA}.`);
   if (sumB !== gB) avisos.push(`${teamB.nombre}: el marcador dice ${gB}, pero los goles por jugador suman ${sumB}.`);
   if (avisos.length && !confirm(avisos.join('\n') + '\n\nSi la diferencia es por un autogol, puedes guardar así.\n¿Guardar de todas formas?')) return;
+  const rojasSinMotivo = (b.tarjetas || []).filter(t => t.tipo === 'roja' && !String(t.observaciones || '').trim());
+  if (rojasSinMotivo.length) {
+    const nj = window.__arNombreJugadorDe || {};
+    alert('Falta escribir el motivo de la roja de:\n' + rojasSinMotivo.map(t => (nj[t.jugadorId] || '—').replace(/&#39;/g, "'")).join('\n'));
+    arAbrirRoja(rojasSinMotivo[0].jugadorId);
+    return;
+  }
+  const am = (b.tarjetas || []).filter(t => t.tipo === 'amarilla').length, ro = (b.tarjetas || []).length - am;
   const informe = String(b.informe || '').trim();
   if (!informe && !confirm('No escribiste el INFORME GENERAL del partido.\n\n¿Guardar sin informe?')) return;
-  if (!confirm(`Vas a guardar:\n\n${teamA.nombre} ${gA} - ${gB} ${teamB.nombre}\nGoleadores: ${golesLista.length}\nTarjetas nuevas: ${b.tarjetas.length}\nInforme general: ${informe ? 'SÍ' : 'NO'}\n\nDespués de esto el partido queda CERRADO y ya no se puede cambiar.\n¿Guardar y finalizar?`)) return;
+  if (!confirm(`Vas a guardar:\n\n${teamA.nombre} ${gA} - ${gB} ${teamB.nombre}\nGoleadores: ${golesLista.length}\nAmarillas nuevas: ${am} · Rojas nuevas: ${ro}\nInforme general: ${informe ? 'SÍ' : 'NO'}\n\nDespués de esto el partido queda CERRADO y ya no se puede cambiar.\n¿Guardar y finalizar?`)) return;
 
   btn.disabled = true;
   const textoOriginal = btn.textContent;
