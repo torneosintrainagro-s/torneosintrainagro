@@ -173,7 +173,7 @@ const LECTURAS = {
   }
 };
 // Acciones que solo leen: no invalidan la foto
-const SOLO_LECTURA = new Set([...Object.keys(LECTURAS), 'verificarPin', 'getTodo', 'iniciarSesion', 'getDocumentosEquipo']);
+const SOLO_LECTURA = new Set([...Object.keys(LECTURAS), 'verificarPin', 'getTodo', 'iniciarSesion', 'getDocumentosEquipo', 'getInformesDelegado']);
 
 function gsCall(fn, ...args) {
   if (LECTURAS[fn] && !SNAP_OFF) {
@@ -215,6 +215,10 @@ const RH_TYPES = ['O+','O-','A+','A-','B+','B-','AB+','AB-'];
 const CANCHAS = ['Cancha la Agrícola', 'Cancha la Floresta', 'Cancha Unidad Deportiva'];
 // Organizadores que pueden quedar a cargo de un partido (y responsables de cobrar sus tarjetas)
 const ORGANIZADORES = ['CABO (ALBERTO)', 'EVER', 'CLAUDIA'];
+// Valor de cada tarjeta (lo que se cobra)
+const VALOR_TARJETA = { amarilla: 5000, roja: 10000 };
+function pesos(n) { return '$' + (Number(n) || 0).toLocaleString('es-CO'); }
+function valorDeTarjeta(t) { return (t.valor !== null && t.valor !== undefined && t.valor !== '') ? Number(t.valor) : (VALOR_TARJETA[t.tipo] || 0); }
 const STATUS = {
   habilitado: {label:'Habilitado', color:'#2E7D46', bg:'#E7F3EA'},
   suspendido: {label:'Suspendido', color:'#B3261E', bg:'#FBEAE9'},
@@ -411,7 +415,7 @@ async function entrarAutomatico() {
 
 // ================= ORGANIZADOR =================
 async function renderOrg() {
-  const tabs = [['resumen','Resumen'],['equipos','Equipos'],['carnets','Carnets'],['partidos','Partidos'],['tarjetas','Amonestaciones']];
+  const tabs = [['resumen','Resumen'],['equipos','Equipos'],['carnets','Carnets'],['partidos','Partidos'],['tarjetas','Tarjetas'],['informes','Informes']];
   app.innerHTML = '<div id="content"></div>' + tabBarHtml(tabs, STATE.tab, 'renderOrg');
   const content = document.getElementById('content');
   if (STATE.tab === 'resumen') content.innerHTML = await orgResumenHtml();
@@ -419,6 +423,7 @@ async function renderOrg() {
   if (STATE.tab === 'carnets') content.innerHTML = await orgCarnetsHtml();
   if (STATE.tab === 'partidos') content.innerHTML = await orgPartidosHtml();
   if (STATE.tab === 'tarjetas') content.innerHTML = await orgTarjetasHtml();
+  if (STATE.tab === 'informes') { content.innerHTML = await orgInformesHtml(); orgPintarInformes(); }
 }
 
 function tabBarHtml(tabs, active, renderFn) {
@@ -803,6 +808,67 @@ function orgPartidoCardHtml(m, nombreDe) {
   </div>`;
 }
 
+// Informes / quejas que enviaron los delegados de un partido (solo el organizador)
+async function informesDelegadosDePartidoHtml(matchId, nombreDe) {
+  let lista = [];
+  try { lista = (await gsCall('getInformesDelegado', matchId)) || []; } catch (e) { return ''; }
+  if (lista.length === 0) return '<div class="card"><div class="muted">📝 Ningún delegado ha enviado informe o queja de este partido.</div></div>';
+  return lista.map(i => informeDelegadoTarjetaHtml(i, nombreDe)).join('');
+}
+function informeDelegadoTarjetaHtml(i, nombreDe) {
+  const queja = i.tipo === 'queja';
+  return `<div class="card" style="border-left:5px solid ${queja ? '#B3261E' : '#0B5FA5'}">
+    <div class="row" style="align-items:center;gap:8px">
+      <span class="badge" style="color:${queja ? '#B3261E' : '#0B5FA5'};background:${queja ? '#FBEAE9' : '#E3EEFB'}">${queja ? '📣 Queja formal' : '📝 Informe general'}</span>
+      <div style="flex:1;font-weight:600">${esc(nombreDe[i.equipoId] || '—')}</div>
+    </div>
+    <div class="muted" style="font-size:12px;margin-top:4px">Enviado: ${esc(fmtTime(i.ts))}</div>
+    <div style="margin-top:6px;white-space:pre-wrap;font-size:14px;line-height:1.45">${esc(i.texto)}</div>
+  </div>`;
+}
+
+// Pestaña "Informes" del organizador: informes del árbitro y de los delegados, por fecha
+async function orgInformesHtml() {
+  const [matches, teams] = await Promise.all([gsCall('getPartidos'), gsCall('getEquipos')]);
+  let delegados = [];
+  try { delegados = (await gsCall('getInformesDelegado', '')) || []; } catch (e) {}
+  const nombreDe = {}; teams.forEach(t => nombreDe[t.id] = t.nombre);
+  window.__oiData = { matches, delegados, nombreDe };
+  const tiene = m => m.informe || delegados.some(d => d.matchId === m.id);
+  const fechas = [...new Set(matches.map(m => m.jornada).filter(j => j !== '' && j != null))].sort((a, b) => Number(a) - Number(b));
+  const ultima = [...fechas].reverse().find(j => matches.some(m => String(m.jornada) === String(j) && tiene(m)));
+  const quejas = delegados.filter(d => d.tipo === 'queja').length;
+  return `<h2 class="bebas">Informes</h2>
+    <p class="sub">Lo que reportaron los árbitros y los delegados en cada partido.${quejas ? ` <strong style="color:#B3261E">${quejas} queja${quejas === 1 ? '' : 's'} formal${quejas === 1 ? '' : 'es'} en total.</strong>` : ''}</p>
+    <select id="oi_fecha" onchange="orgPintarInformes()"><option value="">Todas las fechas</option>
+      ${fechas.map(j => `<option value="${esc(j)}" ${String(j) === String(ultima) ? 'selected' : ''}>Fecha ${esc(j)}</option>`).join('')}</select>
+    <select id="oi_tipo" onchange="orgPintarInformes()">
+      <option value="">Todo (árbitros y delegados)</option><option value="queja">Solo quejas formales</option>
+      <option value="delegados">Solo informes de delegados</option><option value="arbitro">Solo informes del árbitro</option></select>
+    <div id="oi_lista"></div>`;
+}
+function orgPintarInformes() {
+  const { matches, delegados, nombreDe } = window.__oiData || { matches: [], delegados: [], nombreDe: {} };
+  const fecha = document.getElementById('oi_fecha').value, tipo = document.getElementById('oi_tipo').value;
+  const lista = matches.filter(m => !fecha || String(m.jornada) === String(fecha))
+    .sort((a, b) => (Number(a.jornada) - Number(b.jornada)) || (a.fecha || '').localeCompare(b.fecha || '') || (a.hora || '').localeCompare(b.hora || ''));
+  let html = '';
+  lista.forEach(m => {
+    let dels = delegados.filter(d => d.matchId === m.id);
+    if (tipo === 'queja') dels = dels.filter(d => d.tipo === 'queja');
+    const verArb = m.informe && (tipo === '' || tipo === 'arbitro');
+    const verDel = tipo !== 'arbitro' ? dels : [];
+    if (!verArb && verDel.length === 0) return;
+    const jugado = m.golesA !== '' && m.golesA !== undefined && m.golesA !== null;
+    html += `<div style="margin:14px 0 6px;font-weight:700">Fecha ${esc(m.jornada)} · ${esc(nombreDe[m.equipoA] || '—')} ${jugado ? esc(m.golesA) + ' - ' + esc(m.golesB) : 'vs'} ${esc(nombreDe[m.equipoB] || '—')}</div>`;
+    if (verArb) html += `<div class="card" style="border-left:5px solid #123626">
+        <span class="badge" style="color:#123626;background:#E3F3E8">🧑‍⚖️ Informe del árbitro</span>${m.arbitroNombre ? ` <span class="muted" style="font-size:13px">${esc(m.arbitroNombre)}</span>` : ''}
+        <div style="margin-top:6px;white-space:pre-wrap;font-size:14px;line-height:1.45">${esc(m.informe)}</div></div>`;
+    verDel.forEach(d => { html += informeDelegadoTarjetaHtml(d, nombreDe); });
+  });
+  document.getElementById('oi_lista').innerHTML = html || '<p class="muted">No hay informes para mostrar con este filtro.</p>';
+}
+
 // Solo para el organizador: deja un partido como si nunca se hubiera calificado, para corregir
 // un error del árbitro (por ejemplo, calificó un partido de ensayo por equivocación).
 // Ventana para dar un partido por W: se elige el equipo GANADOR y el motivo.
@@ -1092,19 +1158,20 @@ async function verPartido(matchId) {
   content.innerHTML = `<button class="btn-ghost" onclick="renderOrg()">← Volver a partidos</button>
     <h2 class="bebas" style="margin-top:12px">${esc(m.nombre)}</h2><p class="sub">${fmtFechaPartido(m.fecha)}${m.hora?' · '+esc(m.hora):''}${m.cancha?' · 📍 '+esc(m.cancha):''}</p>
     ${m.observaciones?`<p class="muted" style="color:#B8860B">⚠ ${esc(m.observaciones)}</p>`:''}` +
-    resultadoHtml + htmlA + htmlB;
+    resultadoHtml + htmlA + htmlB + await informesDelegadosDePartidoHtml(matchId, { [teamA.id]: teamA.nombre, [teamB.id]: teamB.nombre });
 }
 
 async function orgTarjetasHtml() {
   window.__tarjEquipoActual = null;
-  const [tarjetas, teams] = await Promise.all([gsCall('getTarjetasTodas'), gsCall('getEquipos')]);
+  const [tarjetas, teams, playersTodos, matchesTodos] = await Promise.all([gsCall('getTarjetasTodas'), gsCall('getEquipos'), gsCall('getJugadoresTodos'), gsCall('getPartidos')]);
   const estaPagada = t => t.pagada === true || String(t.pagada).toUpperCase() === 'TRUE';
   const totalAmarillas = tarjetas.filter(t => t.tipo === 'amarilla').length;
   const totalRojas = tarjetas.filter(t => t.tipo === 'roja').length;
   const totalPagadas = tarjetas.filter(estaPagada).length;
   const totalPendientes = tarjetas.length - totalPagadas;
 
-  let html = `<h2 class="bebas">Amonestaciones</h2><p class="sub">Elige un equipo para ver sus tarjetas, fijar sanciones y marcar los pagos.</p>`;
+  let html = `<h2 class="bebas">Amonestaciones</h2><p class="sub">Elige un equipo para ver sus tarjetas, fijar sanciones y registrar los cobros.</p>`;
+  html += resumenCobrosHtml(tarjetas, teams, playersTodos, matchesTodos);
 
   html += `<div class="grid2" style="margin-bottom:12px">
     <div class="card" style="text-align:center;padding:10px">
@@ -1148,6 +1215,62 @@ async function orgTarjetasHtml() {
     </div>`;
   });
   return html;
+}
+
+// ---------- Resumen de cobros: cuánto se ha cobrado, quién lo cobró y cuánto falta ----------
+function resumenCobrosHtml(tarjetas, teams, players, matches) {
+  const pagadas = tarjetas.filter(t => t.pagada === true || String(t.pagada).toUpperCase() === 'TRUE');
+  const pendientes = tarjetas.filter(t => !(t.pagada === true || String(t.pagada).toUpperCase() === 'TRUE'));
+  const suma = lista => lista.reduce((s, t) => s + valorDeTarjeta(t), 0);
+  const cuenta = (lista, tipo) => lista.filter(t => t.tipo === tipo).length;
+  const nombreEq = {}; teams.forEach(t => nombreEq[t.id] = t.nombre);
+  const nombreJ = {}; players.forEach(p => nombreJ[p.id] = '#' + p.numero + ' ' + p.nombre);
+  const orgDe = {}; matches.forEach(m => orgDe[m.id] = m.organizador || '');
+
+  // Cobrado, por organizador
+  const grupos = [...ORGANIZADORES, ''];
+  const filasOrg = grupos.map(o => {
+    const l = pagadas.filter(t => (t.cobradoPor || '') === o);
+    if (l.length === 0 && o === '') return '';
+    return `<tr><td>${o ? esc(o) : '<span class="muted">Sin registrar</span>'}</td><td>${cuenta(l, 'amarilla')}</td><td>${cuenta(l, 'roja')}</td><td><strong>${pesos(suma(l))}</strong></td></tr>`;
+  }).join('');
+  // Pendiente, por responsable (el organizador a cargo del partido)
+  const filasPend = grupos.map(o => {
+    const l = pendientes.filter(t => (orgDe[t.matchId] || '') === o);
+    if (l.length === 0) return '';
+    return `<tr><td>${o ? esc(o) : '<span class="muted">Sin organizador</span>'}</td><td>${cuenta(l, 'amarilla')}</td><td>${cuenta(l, 'roja')}</td><td><strong>${pesos(suma(l))}</strong></td></tr>`;
+  }).join('');
+  // Detalle de cada cobro (más reciente primero)
+  const detalle = [...pagadas].sort((a, b) => String(b.cobradoEn || '').localeCompare(String(a.cobradoEn || ''))).map(t =>
+    `<div style="padding:6px 0;border-bottom:1px solid #eef1ee;font-size:13px">
+      ${t.tipo === 'roja' ? '🟥' : '🟨'} <strong>${pesos(valorDeTarjeta(t))}</strong> · ${esc(nombreJ[t.jugadorId] || '—')} (${esc(nombreEq[t.equipoId] || '')})
+      <div class="muted" style="font-size:12px">Cobró: ${t.cobradoPor ? esc(t.cobradoPor) : 'sin registrar'}${t.cobradoEn ? ' · ' + esc(fmtTime(t.cobradoEn)) : ''}</div>
+    </div>`).join('') || '<p class="muted">Todavía no hay cobros registrados.</p>';
+
+  return `<div class="card" style="border:2px solid #2E7D46">
+    <div style="font-weight:700;font-size:16px">💰 Cobros de tarjetas</div>
+    <div class="muted" style="font-size:12px;margin-bottom:8px">Amarilla ${pesos(VALOR_TARJETA.amarilla)} · Roja ${pesos(VALOR_TARJETA.roja)}</div>
+    <div class="grid2" style="margin-bottom:10px">
+      <div style="text-align:center;padding:10px;border-radius:10px;background:#E3F3E8">
+        <div class="muted" style="font-size:12px">Total cobrado</div>
+        <div class="bebas" style="font-size:28px;color:#2E7D46">${pesos(suma(pagadas))}</div>
+        <div class="muted" style="font-size:12px">${cuenta(pagadas, 'amarilla')} amarillas · ${cuenta(pagadas, 'roja')} rojas</div>
+      </div>
+      <div style="text-align:center;padding:10px;border-radius:10px;background:#FBF3DC">
+        <div class="muted" style="font-size:12px">Falta por cobrar</div>
+        <div class="bebas" style="font-size:28px;color:#B8860B">${pesos(suma(pendientes))}</div>
+        <div class="muted" style="font-size:12px">${cuenta(pendientes, 'amarilla')} amarillas · ${cuenta(pendientes, 'roja')} rojas</div>
+      </div>
+    </div>
+    <div style="font-weight:600;font-size:14px;margin:4px 0">Cobrado por cada organizador</div>
+    <div style="overflow-x:auto"><table class="resumen"><thead><tr><th>Organizador</th><th>🟨</th><th>🟥</th><th>Total</th></tr></thead><tbody>${filasOrg}</tbody></table></div>
+    ${filasPend ? `<div style="font-weight:600;font-size:14px;margin:12px 0 4px">Falta por cobrar (según el organizador a cargo del partido)</div>
+    <div style="overflow-x:auto"><table class="resumen"><thead><tr><th>Responsable</th><th>🟨</th><th>🟥</th><th>Total</th></tr></thead><tbody>${filasPend}</tbody></table></div>` : ''}
+    <div class="row" style="padding:10px 0 0;cursor:pointer" onclick="const d=document.getElementById('detCobros');d.style.display=d.style.display==='none'?'block':'none'">
+      <div style="flex:1;font-weight:600;font-size:14px">Ver detalle de cada cobro (${pagadas.length})</div><div class="muted">▾</div>
+    </div>
+    <div id="detCobros" style="display:none;margin-top:6px">${detalle}</div>
+  </div>`;
 }
 
 // Las tarjetas de UN equipo (con sus botones de sanción, pago y eliminar)
@@ -1197,11 +1320,25 @@ function tarjetasListaHtml(tarjetas) {
         <input type="number" min="0" id="sancion_${t.id}" placeholder="Fechas de suspensión" value="${tieneSancion?esc(t.jornadasSancion):''}" style="flex:1;margin:0">
         <button class="btn-ghost" onclick="orgGuardarSancion('${t.id}')">${tieneSancion?'Actualizar':'Fijar sanción'}</button>
       </div>` : ''}
-      <div class="row" style="margin-top:10px;align-items:center;gap:8px">
-        ${pagada
-          ? `<span class="badge" style="color:#2E7D46;background:#E3F3E8">Pagada</span><button class="btn-ghost" onclick="orgEliminarTarjeta('${t.id}')">Eliminar</button>`
-          : `<span class="badge" style="color:#8a978d;background:#eef1ee">Pendiente de pago</span><button class="btn-primary" onclick="orgPagarTarjeta('${t.id}')">Marcar como pagada</button>`}
-      </div>
+      ${pagada ? `<div style="margin-top:10px;padding:8px 10px;border-radius:8px;background:#E3F3E8;color:#2E7D46;font-size:14px;font-weight:600">
+          ✅ PAGADA · ${pesos(valorDeTarjeta(t))}
+          <div style="font-weight:400;font-size:13px">Cobró: <strong>${t.cobradoPor ? esc(t.cobradoPor) : 'sin registrar'}</strong>${t.cobradoEn ? ' · ' + esc(fmtTime(t.cobradoEn)) : ''}</div>
+        </div>
+        <div class="row" style="margin-top:8px;gap:8px">
+          <button class="btn-ghost" style="padding:8px 12px;font-size:14px" onclick="orgDeshacerPago('${t.id}')">Deshacer pago</button>
+          <button class="btn-ghost" style="padding:8px 12px;font-size:14px;color:#B3261E" onclick="orgEliminarTarjeta('${t.id}')">Eliminar</button>
+        </div>`
+      : `<div class="row" style="margin-top:10px;align-items:center;gap:8px">
+          <span class="badge" style="color:#8a978d;background:#eef1ee">Pendiente de pago · ${pesos(valorDeTarjeta(t))}</span>
+          <button class="btn-primary" onclick="orgMostrarCobro('${t.id}')">Registrar cobro</button>
+        </div>
+        <div id="cobro_${t.id}" style="display:none;margin-top:8px;padding:10px;border-radius:10px;background:#F7FAF7;border:1px solid #e2e8e3">
+          <div style="font-weight:600;font-size:14px;margin-bottom:6px">¿Quién cobró los ${pesos(valorDeTarjeta(t))}?</div>
+          <div class="stack" style="gap:6px">
+            ${[...ORGANIZADORES].sort((a, b) => (b === organizadorDe[t.matchId]) - (a === organizadorDe[t.matchId])).map(o =>
+              `<button class="btn-ghost" style="padding:10px" onclick="orgCobrar('${t.id}','${esc(o)}')">${esc(o)}${o === organizadorDe[t.matchId] ? ' ⭐ (a cargo del partido)' : ''}</button>`).join('')}
+          </div>
+        </div>`}
     </div>`;
   }).join('');
 }
@@ -1217,13 +1354,35 @@ async function orgGuardarSancion(id) {
   }
 }
 
-async function orgPagarTarjeta(id) {
-  await gsCall('marcarTarjetaPagada', id);
-  refrescarTarjetas();
+function orgMostrarCobro(id) {
+  const el = document.getElementById('cobro_' + id);
+  if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
 }
 
+async function orgCobrar(id, quien) {
+  if (!confirm(`¿Registrar que ${quien} cobró esta tarjeta?`)) return;
+  try {
+    await gsCall('marcarTarjetaPagada', id, quien);
+    refrescarTarjetas();
+  } catch (e) {
+    alert(e && e.message ? e.message : 'No se pudo registrar el cobro.');
+  }
+}
+
+async function orgDeshacerPago(id) {
+  if (!confirm('¿Deshacer el pago de esta tarjeta?\n\nVuelve a quedar pendiente y sale del resumen de cobros.')) return;
+  try {
+    await gsCall('desmarcarPagoTarjeta', id);
+    refrescarTarjetas();
+  } catch (e) {
+    alert(e && e.message ? e.message : 'No se pudo deshacer el pago.');
+  }
+}
+
+async function orgPagarTarjeta(id) { orgMostrarCobro(id); }
+
 async function orgEliminarTarjeta(id) {
-  if (!confirm('¿Eliminar esta tarjeta ya pagada? No se puede deshacer.')) return;
+  if (!confirm('¿Eliminar esta tarjeta ya pagada?\n\nOjo: también sale del resumen de cobros. No se puede deshacer.')) return;
   try {
     await gsCall('eliminarTarjeta', id);
   } catch (e) {
@@ -1345,7 +1504,7 @@ async function delegatePartidosHtml() {
   const misPartidos = matches.filter(m => m.equipoA === STATE.team.id || m.equipoB === STATE.team.id)
     .sort((a, b) => (Number(a.jornada) || 0) - (Number(b.jornada) || 0));
   const nombreEquipoDe = {}; teams.forEach(t => nombreEquipoDe[t.id] = t.nombre);
-  let html = `<h2 class="bebas">Partidos — ${esc(STATE.team.nombre)}</h2><p class="sub">Elige una fecha para ver el resultado y los detalles registrados por el árbitro.</p>`;
+  let html = `<h2 class="bebas">Partidos — ${esc(STATE.team.nombre)}</h2><p class="sub">Toca un partido para ver el resultado y los detalles, o para enviar tu informe o queja formal.</p>`;
   if (misPartidos.length === 0) html += '<p class="muted">Aún no tienes partidos programados.</p>';
   misPartidos.forEach(m => {
     const rival = m.equipoA === STATE.team.id ? nombreEquipoDe[m.equipoB] : nombreEquipoDe[m.equipoA];
@@ -1466,10 +1625,56 @@ async function verPartidoDelegado(matchId) {
     return h;
   };
   const [htmlA, htmlB] = await Promise.all([blockHtml(teamA, playersA), blockHtml(teamB, playersB)]);
+  let miInforme = null;
+  try { miInforme = ((await gsCall('getInformesDelegado', matchId)) || []).find(i => String(i.equipoId) === String(STATE.team.id)) || null; } catch (e) {}
   content.innerHTML = `<button class="btn-ghost" onclick="renderDelegate()">← Volver a partidos</button>
     <h2 class="bebas" style="margin-top:12px">${esc(m.nombre)}</h2><p class="sub">${fmtFechaPartido(m.fecha)}${m.hora?' · '+esc(m.hora):''}${m.cancha?' · 📍 '+esc(m.cancha):''}</p>
     ${m.observaciones?`<p class="muted" style="color:#B8860B">⚠ ${esc(m.observaciones)}</p>`:''}` +
-    resultadoHtml + htmlA + htmlB;
+    resultadoHtml + htmlA + htmlB + informeDelegadoHtml(matchId, miInforme);
+}
+
+// ---------- Informe general o queja formal del delegado (lo ve solo la organización) ----------
+function claveInfDel(matchId) { return 'infDelegado:' + API_URL + ':' + matchId + ':' + STATE.team.id; }
+function informeDelegadoHtml(matchId, mio) {
+  let borrador = null;
+  try { borrador = JSON.parse(localStorage.getItem(claveInfDel(matchId)) || 'null'); } catch (e) {}
+  const tipo = (borrador && borrador.tipo) || (mio && mio.tipo) || 'informe';
+  const texto = (borrador && borrador.texto !== undefined) ? borrador.texto : (mio ? mio.texto : '');
+  window.__infDelTipo = tipo;
+  const boton = (t, etiqueta) => `<button class="btn-ghost" id="infdel_${t}" style="flex:1;${tipo === t ? 'background:#123626;color:#fff' : ''}" onclick="infDelTipo('${matchId}','${t}')">${etiqueta}</button>`;
+  return `<div class="card" style="border:2px solid #123626;margin-top:12px">
+    <div style="font-weight:700;font-size:16px">📝 Informe o queja formal de tu equipo</div>
+    <p class="muted" style="font-size:13px;margin:4px 0 10px">Escribe las novedades del partido, la actuación del árbitro y todo lo que quieras reportar. Solo lo ve la organización. Puedes dictarlo con el micrófono 🎤 del teclado.</p>
+    <div class="row" style="gap:8px;margin-bottom:8px">${boton('informe', 'Informe general')}${boton('queja', 'Queja formal')}</div>
+    <textarea id="infdel_texto" rows="8" oninput="infDelGuardarBorrador('${matchId}')" placeholder="Escribe aquí…" style="width:100%;padding:12px;border-radius:8px;border:1px solid #d8ded8;font-family:inherit;font-size:16px">${esc(texto)}</textarea>
+    <button class="btn-primary" id="infdel_btn" style="width:100%;margin-top:8px" onclick="infDelEnviar('${matchId}')">${mio ? 'Enviar corrección al organizador' : 'Enviar al organizador'}</button>
+    <div id="infdel_estado" style="font-size:13px;margin-top:6px;color:#2E7D46">${mio ? `✓ Enviado el ${esc(fmtTime(mio.ts))} como ${mio.tipo === 'queja' ? 'QUEJA FORMAL' : 'INFORME GENERAL'}. Puedes corregirlo y volver a enviarlo.` : ''}</div>
+  </div>`;
+}
+function infDelTipo(matchId, tipo) {
+  window.__infDelTipo = tipo;
+  ['informe', 'queja'].forEach(t => { const b = document.getElementById('infdel_' + t); if (b) { b.style.background = t === tipo ? '#123626' : 'transparent'; b.style.color = t === tipo ? '#fff' : '#123626'; } });
+  infDelGuardarBorrador(matchId);
+}
+function infDelGuardarBorrador(matchId) {
+  try { localStorage.setItem(claveInfDel(matchId), JSON.stringify({ tipo: window.__infDelTipo, texto: document.getElementById('infdel_texto').value })); } catch (e) {}
+}
+async function infDelEnviar(matchId) {
+  const btn = document.getElementById('infdel_btn');
+  const texto = document.getElementById('infdel_texto').value.trim();
+  const tipo = window.__infDelTipo || 'informe';
+  if (!texto) { alert('Escribe el informe antes de enviarlo.'); return; }
+  if (!confirm(`¿Enviar este ${tipo === 'queja' ? 'QUEJA FORMAL' : 'INFORME GENERAL'} al organizador?`)) return;
+  btn.disabled = true; const t0 = btn.textContent; btn.textContent = 'Enviando…';
+  try {
+    await gsCall('guardarInformeDelegado', matchId, STATE.team.id, tipo, texto);
+    try { localStorage.removeItem(claveInfDel(matchId)); } catch (e) {}
+    btn.disabled = false; btn.textContent = 'Enviar corrección al organizador';
+    document.getElementById('infdel_estado').textContent = '✓ Enviado. El organizador ya lo recibió. Puedes corregirlo y volver a enviarlo.';
+  } catch (e) {
+    btn.disabled = false; btn.textContent = t0;
+    alert(e && e.message ? e.message : 'No se pudo enviar. Lo que escribiste quedó guardado en este celular; intenta de nuevo.');
+  }
 }
 
 function planillaFilaHtml(p) {
@@ -1535,6 +1740,7 @@ async function planillaHtml() {
   }
   html += `<button class="btn-add" id="addPlayerBtn" onclick="showPlayerForm()" ${cupoLleno?'disabled':''}>+ Agregar jugador</button>
   <div class="card" id="playerForm" style="display:none">
+    <label class="lbl">Foto del jugador <span class="req">*</span> <span class="muted" style="font-weight:400">(obligatoria para carnet nuevo)</span></label>
     <div class="row" style="margin-bottom:10px; flex-wrap:wrap; gap:8px">
       <div class="photo" id="photoPreview" style="width:64px;height:64px"></div>
       <label class="btn-ghost">Tomar foto<input type="file" accept="image/*" capture="environment" style="display:none" onchange="onPhotoChosen(this.files[0])"></label>
@@ -1610,6 +1816,7 @@ async function savePlayer() {
   if (!posicion) faltan.push('posición');
   if (!cuarentonSel) faltan.push('si es cuarentón');
   if (!refuerzoSel) faltan.push('si es refuerzo');
+  if (!editingId && !currentPhoto) faltan.unshift('la foto del jugador');
   if (faltan.length) { errEl.innerText = 'Falta llenar: ' + faltan.join(', ') + '.'; return; }
   if (!/^\d{5,12}$/.test(docId)) { errEl.innerText = 'La cédula debe tener solo números, sin puntos ni letras.'; return; }
   const n = Number(numero);
