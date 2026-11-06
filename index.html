@@ -260,6 +260,16 @@ function sancionHtml(t) {
 function fmtTime(iso){ try { const d=new Date(iso); return d.toLocaleString('es-CO',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}); } catch(e){ return iso; } }
 // Ojo: el 0 es un valor válido (por ejemplo, un marcador 1 - 0). Antes, (s||'') convertía el 0 en vacío.
 function esc(s){ return (s === null || s === undefined ? '' : String(s)).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+// Hora en formato normal (12 horas): "13:30" → "1:30 PM", "09:00" → "9:00 AM", "12:00" → "12:00 PM", "00:15" → "12:15 AM".
+// Se guarda igual que siempre (el campo de hora del celular la maneja así); solo cambia cómo se MUESTRA.
+function fmtHora(h) {
+  const m = String(h == null ? '' : h).trim().match(/^(\d{1,2}):(\d{2})/);
+  if (!m) return String(h == null ? '' : h);
+  let hh = Number(m[1]);
+  const sufijo = hh >= 12 ? 'PM' : 'AM';
+  hh = hh % 12; if (hh === 0) hh = 12;
+  return `${hh}:${m[2]} ${sufijo}`;
+}
 function fmtFechaPartido(iso) {
   if (!iso) return '';
   const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})/);
@@ -528,7 +538,7 @@ function descargarProgramacionPDF(soloPendientes) {
     head: [['Local', 'Visitante', 'Día', 'Hora', 'Cancha', 'Organizador', 'Estado']],
     body: lista.map(({ m, e }) => [
       nombreDe[m.equipoA] || '—', nombreDe[m.equipoB] || '—', fmtFechaPartido(m.fecha) || '—',
-      m.hora || '—', m.cancha || '—', m.organizador || '—', e.texto + (m.observaciones ? '\n' + m.observaciones : '')
+      fmtHora(m.hora) || '—', m.cancha || '—', m.organizador || '—', e.texto + (m.observaciones ? '\n' + m.observaciones : '')
     ]),
     startY: 25, styles: { fontSize: 9 }, headStyles: { fillColor: [18, 54, 38] },
     didParseCell: (d) => {
@@ -797,7 +807,7 @@ function orgPartidoCardHtml(m, nombreDe) {
   return `<div class="card">
     <div onclick="verPartido('${m.id}')" style="cursor:pointer">
       <div style="font-weight:600">${esc(m.nombre)}</div>
-      <div class="muted">${esc(nombreDe[m.equipoA])} vs ${esc(nombreDe[m.equipoB])}${m.fecha?' · '+fmtFechaPartido(m.fecha):''}${m.hora?' · '+esc(m.hora):''}</div>
+      <div class="muted">${esc(nombreDe[m.equipoA])} vs ${esc(nombreDe[m.equipoB])}${m.fecha?' · '+fmtFechaPartido(m.fecha):''}${m.hora?' · '+esc(fmtHora(m.hora)):''}</div>
       ${m.cancha?`<div class="muted">📍 ${esc(m.cancha)}</div>`:''}
       ${m.organizador?`<div class="muted">👤 Organizador: ${esc(m.organizador)}</div>`:''}
       ${m.arbitroNombre?`<div class="muted">🧑‍⚖️ ${esc(m.arbitroNombre)}</div>`:''}
@@ -1176,7 +1186,7 @@ async function verPartido(matchId) {
   };
   const [htmlA, htmlB] = await Promise.all([blockHtml(teamA, playersA), blockHtml(teamB, playersB)]);
   content.innerHTML = `<button class="btn-ghost" onclick="renderOrg()">← Volver a partidos</button>
-    <h2 class="bebas" style="margin-top:12px">${esc(m.nombre)}</h2><p class="sub">${fmtFechaPartido(m.fecha)}${m.hora?' · '+esc(m.hora):''}${m.cancha?' · 📍 '+esc(m.cancha):''}</p>
+    <h2 class="bebas" style="margin-top:12px">${esc(m.nombre)}</h2><p class="sub">${fmtFechaPartido(m.fecha)}${m.hora?' · '+esc(fmtHora(m.hora)):''}${m.cancha?' · 📍 '+esc(m.cancha):''}</p>
     ${m.observaciones?`<p class="muted" style="color:#B8860B">⚠ ${esc(m.observaciones)}</p>`:''}` +
     resultadoHtml + htmlA + htmlB + await informesDelegadosDePartidoHtml(matchId, { [teamA.id]: teamA.nombre, [teamB.id]: teamB.nombre });
 }
@@ -1568,7 +1578,7 @@ async function delegatePartidosHtml() {
     html += `<div class="card row" style="cursor:pointer;align-items:center" onclick="verPartidoDelegado('${m.id}')">
       <div style="flex:1">
         <div style="font-weight:600">${esc(m.nombre)}</div>
-        <div class="muted">vs ${esc(rival||'—')}${m.fecha?' · '+fmtFechaPartido(m.fecha):''}${m.hora?' · '+esc(m.hora):''}</div>
+        <div class="muted">vs ${esc(rival||'—')}${m.fecha?' · '+fmtFechaPartido(m.fecha):''}${m.hora?' · '+esc(fmtHora(m.hora)):''}</div>
         ${m.cancha?`<div class="muted">📍 ${esc(m.cancha)}</div>`:''}
       ${m.organizador?`<div class="muted">👤 Organizador: ${esc(m.organizador)}</div>`:''}
         ${m.observaciones?`<div class="muted" style="color:#B8860B">⚠ ${esc(m.observaciones)}</div>`:''}
@@ -1678,7 +1688,7 @@ async function verPartidoDelegado(matchId) {
   let miInforme = null;
   try { miInforme = ((await gsCall('getInformesDelegado', matchId)) || []).find(i => String(i.equipoId) === String(STATE.team.id)) || null; } catch (e) {}
   content.innerHTML = `<button class="btn-ghost" onclick="renderDelegate()">← Volver a partidos</button>
-    <h2 class="bebas" style="margin-top:12px">${esc(m.nombre)}</h2><p class="sub">${fmtFechaPartido(m.fecha)}${m.hora?' · '+esc(m.hora):''}${m.cancha?' · 📍 '+esc(m.cancha):''}</p>
+    <h2 class="bebas" style="margin-top:12px">${esc(m.nombre)}</h2><p class="sub">${fmtFechaPartido(m.fecha)}${m.hora?' · '+esc(fmtHora(m.hora)):''}${m.cancha?' · 📍 '+esc(m.cancha):''}</p>
     ${m.observaciones?`<p class="muted" style="color:#B8860B">⚠ ${esc(m.observaciones)}</p>`:''}` +
     resultadoHtml + htmlA + htmlB + informeDelegadoHtml(matchId, miInforme);
 }
@@ -1916,7 +1926,7 @@ async function alineacionRender(content) {
   const nombreEquipoDe = {}; teams.forEach(t => nombreEquipoDe[t.id] = t.nombre);
   const rivalDe = (m) => m.equipoA === STATE.team.id ? nombreEquipoDe[m.equipoB] : nombreEquipoDe[m.equipoA];
   content.innerHTML = `<h2 class="bebas">Alineación — ${esc(STATE.team.nombre)}</h2><p class="sub">Elige titulares y suplentes de tu plantilla</p>
-    <select id="al_match" onchange="alineacionCargar()"><option value="">Elige un partido…</option>${matches.map(m=>`<option value="${m.id}">${esc(m.nombre)} · vs ${esc(rivalDe(m)||'—')}${m.fecha?' · '+fmtFechaPartido(m.fecha):''}${m.hora?' '+esc(m.hora):''}${m.cancha?' · '+esc(m.cancha):''}</option>`).join('')}</select>
+    <select id="al_match" onchange="alineacionCargar()"><option value="">Elige un partido…</option>${matches.map(m=>`<option value="${m.id}">${esc(m.nombre)} · vs ${esc(rivalDe(m)||'—')}${m.fecha?' · '+fmtFechaPartido(m.fecha):''}${m.hora?' '+esc(fmtHora(m.hora)):''}${m.cancha?' · '+esc(m.cancha):''}</option>`).join('')}</select>
     <div id="al_body"></div>`;
   // Solo los jugadores habilitados (dentro del cupo de 22) se pueden alinear.
   window.__alPlayers = players.filter(p => p.activo !== false);
@@ -2015,7 +2025,7 @@ async function enVivoRender(content) {
   const rivalDe = (m) => m.equipoA === STATE.team.id ? nombreEquipoDe[m.equipoB] : nombreEquipoDe[m.equipoA];
   window.__evMatches = matches;
   content.innerHTML = `<h2 class="bebas">Sustituciones — ${esc(STATE.team.nombre)}</h2><p class="sub">Registra las entradas y salidas del partido</p>
-    <select id="ev_match" onchange="enVivoCargar()"><option value="">Elige un partido…</option>${matches.map(m=>`<option value="${m.id}">${esc(m.nombre)} · vs ${esc(rivalDe(m)||'—')}${m.fecha?' · '+fmtFechaPartido(m.fecha):''}${m.hora?' '+esc(m.hora):''}${m.cancha?' · '+esc(m.cancha):''}</option>`).join('')}</select>
+    <select id="ev_match" onchange="enVivoCargar()"><option value="">Elige un partido…</option>${matches.map(m=>`<option value="${m.id}">${esc(m.nombre)} · vs ${esc(rivalDe(m)||'—')}${m.fecha?' · '+fmtFechaPartido(m.fecha):''}${m.hora?' '+esc(fmtHora(m.hora)):''}${m.cancha?' · '+esc(m.cancha):''}</option>`).join('')}</select>
     <div id="ev_body"></div>`;
 }
 async function enVivoCargar() {
@@ -2134,7 +2144,7 @@ function arbitroPintarInformes() {
   cont.innerHTML = lista.map(m => {
     const jugado = m.golesA !== '' && m.golesA !== undefined && m.golesA !== null;
     return `<div class="card">
-      <div class="muted" style="font-size:13px">Fecha ${esc(m.jornada)}${m.fecha ? ' · ' + fmtFechaPartido(m.fecha) : ''}${m.hora ? ' · ' + esc(m.hora) : ''}${m.cancha ? ' · ' + esc(m.cancha) : ''}</div>
+      <div class="muted" style="font-size:13px">Fecha ${esc(m.jornada)}${m.fecha ? ' · ' + fmtFechaPartido(m.fecha) : ''}${m.hora ? ' · ' + esc(fmtHora(m.hora)) : ''}${m.cancha ? ' · ' + esc(m.cancha) : ''}</div>
       <div style="font-weight:600;font-size:16px;margin:4px 0">${esc(nombreDe[m.equipoA] || '—')} ${jugado ? esc(m.golesA) + ' - ' + esc(m.golesB) : 'vs'} ${esc(nombreDe[m.equipoB] || '—')}</div>
       ${m.arbitroNombre ? `<div class="muted" style="font-size:13px">Árbitro: ${esc(m.arbitroNombre)}</div>` : ''}
       ${lineaW(m, nombreDe)}
@@ -2165,7 +2175,7 @@ function arbitroFiltrarPartidos() {
   const nombreEquipoDe = window.__arNombreEquipoDe;
   const partidos = (window.__arAllMatches || []).filter(m => String(m.jornada) === String(jornada));
   sel.innerHTML = '<option value="">Elige un partido…</option>' +
-    partidos.map(m => `<option value="${m.id}">${esc(nombreEquipoDe[m.equipoA]||'—')} vs ${esc(nombreEquipoDe[m.equipoB]||'—')}${m.fecha?' · '+fmtFechaPartido(m.fecha):''}${m.hora?' '+esc(m.hora):''}${m.cancha?' · '+esc(m.cancha):''}</option>`).join('');
+    partidos.map(m => `<option value="${m.id}">${esc(nombreEquipoDe[m.equipoA]||'—')} vs ${esc(nombreEquipoDe[m.equipoB]||'—')}${m.fecha?' · '+fmtFechaPartido(m.fecha):''}${m.hora?' '+esc(fmtHora(m.hora)):''}${m.cancha?' · '+esc(m.cancha):''}</option>`).join('');
   sel.style.display = '';
   sel.value = '';
 }
@@ -2362,7 +2372,7 @@ async function arbitroRedibujar() {
   const tieneResultado = m.golesA !== '' && m.golesA !== undefined && m.golesA !== null;
   const golesGuardados = {}; goles.forEach(g => { if (Number(g.goles) > 0) golesGuardados[g.jugadorId] = Number(g.goles); });
 
-  let html = `<p class="muted" style="margin-top:-4px">${esc(m.nombre)}${m.fecha?' · '+fmtFechaPartido(m.fecha):''}${m.hora?' '+esc(m.hora):''}</p>`;
+  let html = `<p class="muted" style="margin-top:-4px">${esc(m.nombre)}${m.fecha?' · '+fmtFechaPartido(m.fecha):''}${m.hora?' '+esc(fmtHora(m.hora)):''}</p>`;
 
   // ---------- Partido ya cerrado: solo se muestra lo guardado ----------
   if (finalizado) {
