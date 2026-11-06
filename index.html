@@ -173,7 +173,7 @@ const LECTURAS = {
   }
 };
 // Acciones que solo leen: no invalidan la foto
-const SOLO_LECTURA = new Set([...Object.keys(LECTURAS), 'verificarPin', 'getTodo', 'iniciarSesion', 'getDocumentosEquipo', 'getInformesDelegado']);
+const SOLO_LECTURA = new Set([...Object.keys(LECTURAS), 'verificarPin', 'getTodo', 'iniciarSesion', 'getDocumentosEquipo', 'getInformesDelegado', 'identificarCobrador']);
 
 function gsCall(fn, ...args) {
   if (LECTURAS[fn] && !SNAP_OFF) {
@@ -422,7 +422,11 @@ async function renderOrg() {
   if (STATE.tab === 'equipos') content.innerHTML = await orgEquiposHtml();
   if (STATE.tab === 'carnets') content.innerHTML = await orgCarnetsHtml();
   if (STATE.tab === 'partidos') content.innerHTML = await orgPartidosHtml();
-  if (STATE.tab === 'tarjetas') content.innerHTML = await orgTarjetasHtml();
+  if (STATE.tab !== 'tarjetas') window.__cobrador = null;   // al salir de Tarjetas, se vuelve a pedir el PIN personal
+  if (STATE.tab === 'tarjetas') {
+    if (!window.__cobrador) { content.innerHTML = cobradorGateHtml(); const i = document.getElementById('pinCobrador'); if (i) i.focus(); }
+    else content.innerHTML = await orgTarjetasHtml();
+  }
   if (STATE.tab === 'informes') { content.innerHTML = await orgInformesHtml(); orgPintarInformes(); }
 }
 
@@ -800,6 +804,8 @@ function orgPartidoCardHtml(m, nombreDe) {
       ${m.observaciones?`<div class="muted" style="color:#B8860B;margin-top:4px">⚠ ${esc(m.observaciones)}</div>`:''}
     </div>
     <button class="btn-ghost" style="margin-top:8px" onclick="event.stopPropagation(); editarPartidoForm('${m.id}')">Editar día / hora / cancha</button>
+    ${(!tieneResultado && !finalizado && !m.ganadorW && (m.fecha || m.hora || m.cancha || m.organizador))
+      ? `<button class="btn-ghost" style="margin-top:6px;color:#B3261E;border-color:#f3c9c5" onclick="event.stopPropagation(); orgCancelarProgramacion('${m.id}')">🗑️ Cancelar programación</button>` : ''}
     ${m.ganadorW ? lineaW(m, nombreDe) + `<button class="btn-ghost" style="margin-top:6px" onclick="event.stopPropagation(); orgQuitarW('${m.id}')">Quitar el W</button>`
       : `<button class="btn-ghost" style="margin-top:6px" onclick="event.stopPropagation(); orgAbrirW('${m.id}')">⚖️ Dar por W (retiro o no presentación)</button>`}
     ${finalizado ? `<div class="muted" style="margin-top:8px;color:#2E7D46">🔒 Cerrado por el árbitro</div>
@@ -939,6 +945,20 @@ async function orgQuitarW(matchId) {
     await renderOrg();
   } catch (e) {
     alert(e && e.message ? e.message : 'No se pudo quitar el W.');
+  }
+}
+
+// Si un partido se programó mal (y todavía no se ha jugado): borra día, hora, cancha, organizador y observación.
+// El partido sigue en su fecha y con sus equipos, listo para volver a programarlo.
+async function orgCancelarProgramacion(matchId) {
+  const m = (window.__matchesData || {})[matchId];
+  const nombreDe = window.__nombreEquipoPartidos || {};
+  if (!confirm(`¿Cancelar la programación de ${m ? nombreDe[m.equipoA] + ' vs ' + nombreDe[m.equipoB] : 'este partido'}?\n\nSe borran el día, la hora, la cancha y el organizador. El partido sigue en su fecha, listo para volver a programarlo.`)) return;
+  try {
+    await gsCall('cancelarProgramacion', matchId);
+    await renderOrg();
+  } catch (e) {
+    alert(e && e.message ? e.message : 'No se pudo cancelar la programación.');
   }
 }
 
@@ -1170,7 +1190,7 @@ async function orgTarjetasHtml() {
   const totalPagadas = tarjetas.filter(estaPagada).length;
   const totalPendientes = tarjetas.length - totalPagadas;
 
-  let html = `<h2 class="bebas">Amonestaciones</h2><p class="sub">Elige un equipo para ver sus tarjetas, fijar sanciones y registrar los cobros.</p>`;
+  let html = bannerCobradorHtml() + `<h2 class="bebas">Amonestaciones</h2><p class="sub">Elige un equipo para ver sus tarjetas, fijar sanciones y registrar los cobros.</p>`;
   html += resumenCobrosHtml(tarjetas, teams, playersTodos, matchesTodos);
 
   html += `<div class="grid2" style="margin-bottom:12px">
@@ -1215,6 +1235,40 @@ async function orgTarjetasHtml() {
     </div>`;
   });
   return html;
+}
+
+// ---------- Entrada a TARJETAS con el PIN personal de cada organizador ----------
+// Cabo, Ever y Claudia tienen cada uno su PIN. Todo cobro queda a nombre de quien entró.
+function cobradorGateHtml(error) {
+  return `<h2 class="bebas">Tarjetas</h2>
+    <p class="sub">Para entrar a Tarjetas, ingresa <strong>tu PIN personal</strong>. Todo cobro que registres quedará a tu nombre.</p>
+    <div class="card">
+      <input id="pinCobrador" class="pin-input" maxlength="6" inputmode="numeric" placeholder="••••" onkeydown="if(event.key==='Enter') orgEntrarTarjetas()">
+      <div id="pinCobradorError" style="color:#B3261E;font-size:13px;margin-bottom:8px">${error ? esc(error) : ''}</div>
+      <button class="btn-primary" id="pinCobradorBtn" onclick="orgEntrarTarjetas()">Entrar a Tarjetas</button>
+    </div>`;
+}
+async function orgEntrarTarjetas() {
+  const input = document.getElementById('pinCobrador'), btn = document.getElementById('pinCobradorBtn');
+  const pin = input.value.trim();
+  if (!pin || btn.disabled) return;
+  btn.disabled = true; btn.textContent = 'Entrando…';
+  try {
+    const r = await gsCall('identificarCobrador', pin);
+    if (!r || !r.nombre) { document.getElementById('content').innerHTML = cobradorGateHtml('PIN incorrecto. Intenta de nuevo.'); document.getElementById('pinCobrador').focus(); return; }
+    window.__cobrador = { nombre: r.nombre, pin };
+    renderOrg();
+  } catch (e) {
+    document.getElementById('content').innerHTML = cobradorGateHtml((e && e.message) || 'No se pudo verificar el PIN.');
+  }
+}
+function orgSalirTarjetas() { window.__cobrador = null; renderOrg(); }
+function bannerCobradorHtml() {
+  const c = window.__cobrador; if (!c) return '';
+  return `<div class="card row" style="align-items:center;background:#123626;color:#fff;padding:10px 14px">
+    <div style="flex:1;font-weight:700">👤 Estás como: ${esc(c.nombre)}</div>
+    <button class="btn-ghost" style="background:#fff;padding:6px 12px;font-size:13px" onclick="orgSalirTarjetas()">Salir</button>
+  </div>`;
 }
 
 // ---------- Resumen de cobros: cuánto se ha cobrado, quién lo cobró y cuánto falta ----------
@@ -1285,7 +1339,7 @@ async function verTarjetasEquipo(equipoId) {
   const organizadorDe = {}; matches.forEach(m => organizadorDe[m.id] = m.organizador || '');
   window.__tarjetasData = { tarjetas, teams, nombreEquipoDe, nombreJugadorDe, nombrePartidoDe, organizadorDe };
   const deEquipo = tarjetas.filter(t => String(t.equipoId) === String(equipoId));
-  content.innerHTML = `<button class="btn-ghost" onclick="renderOrg()">← Volver a equipos</button>
+  content.innerHTML = bannerCobradorHtml() + `<button class="btn-ghost" onclick="renderOrg()">← Volver a equipos</button>
     <h2 class="bebas" style="margin-top:12px">Amonestaciones — ${esc(nombreEquipoDe[equipoId] || '')}</h2>
     <p class="sub">${deEquipo.length} tarjeta${deEquipo.length===1?'':'s'}</p>` + tarjetasListaHtml(deEquipo);
 }
@@ -1328,16 +1382,9 @@ function tarjetasListaHtml(tarjetas) {
           <button class="btn-ghost" style="padding:8px 12px;font-size:14px" onclick="orgDeshacerPago('${t.id}')">Deshacer pago</button>
           <button class="btn-ghost" style="padding:8px 12px;font-size:14px;color:#B3261E" onclick="orgEliminarTarjeta('${t.id}')">Eliminar</button>
         </div>`
-      : `<div class="row" style="margin-top:10px;align-items:center;gap:8px">
+      : `<div class="row" style="margin-top:10px;align-items:center;gap:8px;flex-wrap:wrap">
           <span class="badge" style="color:#8a978d;background:#eef1ee">Pendiente de pago · ${pesos(valorDeTarjeta(t))}</span>
-          <button class="btn-primary" onclick="orgMostrarCobro('${t.id}')">Registrar cobro</button>
-        </div>
-        <div id="cobro_${t.id}" style="display:none;margin-top:8px;padding:10px;border-radius:10px;background:#F7FAF7;border:1px solid #e2e8e3">
-          <div style="font-weight:600;font-size:14px;margin-bottom:6px">¿Quién cobró los ${pesos(valorDeTarjeta(t))}?</div>
-          <div class="stack" style="gap:6px">
-            ${[...ORGANIZADORES].sort((a, b) => (b === organizadorDe[t.matchId]) - (a === organizadorDe[t.matchId])).map(o =>
-              `<button class="btn-ghost" style="padding:10px" onclick="orgCobrar('${t.id}','${esc(o)}')">${esc(o)}${o === organizadorDe[t.matchId] ? ' ⭐ (a cargo del partido)' : ''}</button>`).join('')}
-          </div>
+          <button class="btn-primary" onclick="orgCobrar('${t.id}')">💰 Registrar cobro${window.__cobrador ? ' (' + esc(window.__cobrador.nombre) + ')' : ''}</button>
         </div>`}
     </div>`;
   }).join('');
@@ -1359,10 +1406,13 @@ function orgMostrarCobro(id) {
   if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
 }
 
-async function orgCobrar(id, quien) {
-  if (!confirm(`¿Registrar que ${quien} cobró esta tarjeta?`)) return;
+async function orgCobrar(id) {
+  const c = window.__cobrador;
+  if (!c) { renderOrg(); return; }
+  const t = ((window.__tarjetasData || {}).tarjetas || []).find(x => x.id === id);
+  if (!confirm(`¿Registrar que ${c.nombre} cobró esta tarjeta${t ? ' ' + t.tipo + ' de ' + pesos(valorDeTarjeta(t)) : ''}?`)) return;
   try {
-    await gsCall('marcarTarjetaPagada', id, quien);
+    await gsCall('marcarTarjetaPagada', id, c.nombre, c.pin);
     refrescarTarjetas();
   } catch (e) {
     alert(e && e.message ? e.message : 'No se pudo registrar el cobro.');
@@ -1372,7 +1422,7 @@ async function orgCobrar(id, quien) {
 async function orgDeshacerPago(id) {
   if (!confirm('¿Deshacer el pago de esta tarjeta?\n\nVuelve a quedar pendiente y sale del resumen de cobros.')) return;
   try {
-    await gsCall('desmarcarPagoTarjeta', id);
+    await gsCall('desmarcarPagoTarjeta', id, (window.__cobrador || {}).pin || '');
     refrescarTarjetas();
   } catch (e) {
     alert(e && e.message ? e.message : 'No se pudo deshacer el pago.');
