@@ -826,11 +826,57 @@ function orgPartidoCardHtml(m, nombreDe) {
 
 // Informes / quejas que enviaron los delegados de un partido (solo el organizador)
 async function informesDelegadosDePartidoHtml(matchId, nombreDe) {
+  window.__refrescarInformes = () => verPartido(matchId);
   let lista = [];
   try { lista = (await gsCall('getInformesDelegado', matchId)) || []; } catch (e) { return ''; }
   if (lista.length === 0) return '<div class="card"><div class="muted">📝 Ningún delegado ha enviado informe o queja de este partido.</div></div>';
   return lista.map(i => informeDelegadoTarjetaHtml(i, nombreDe)).join('');
 }
+// Bloque de la respuesta del organizador (se ve igual para el organizador y para el delegado)
+function respuestaHtml(i) {
+  if (!i.respuesta) return '';
+  return `<div style="margin-top:10px;padding:10px;border-radius:10px;background:#E3F3E8;border:1px solid #b9dcc2">
+    <div style="font-weight:700;font-size:14px;color:#2E7D46">📬 Respuesta del organizador</div>
+    ${i.respuestaTs ? `<div class="muted" style="font-size:12px">${esc(fmtTime(i.respuestaTs))}</div>` : ''}
+    <div style="margin-top:4px;white-space:pre-wrap;font-size:14px;line-height:1.45">${esc(i.respuesta)}</div>
+    ${i.respuestaFotoUrl ? `<div class="photo clickable" style="width:120px;height:120px;margin-top:8px" onclick="verFoto('${esc(i.respuestaFotoUrl)}')"><img src="${esc(i.respuestaFotoUrl)}"></div>
+      <div class="muted" style="font-size:12px">📎 Foto de evidencia (tócala para verla en grande)</div>` : ''}
+  </div>`;
+}
+function formRespuestaHtml(i) {
+  return `<div id="resp_form_${i.id}" style="margin-top:10px;${i.respuesta ? 'display:none' : ''}">
+    <div class="lbl">✉️ ${i.respuesta ? 'Corregir la respuesta' : 'Responder al delegado'}</div>
+    <textarea id="resp_txt_${i.id}" rows="4" placeholder="Escribe la respuesta…" style="width:100%;padding:10px;border-radius:8px;border:1px solid #d8ded8;font-family:inherit;font-size:16px">${esc(i.respuesta || '')}</textarea>
+    <div class="row" style="gap:8px;margin-top:6px;align-items:center;flex-wrap:wrap">
+      <label class="btn-ghost" style="padding:8px 12px;font-size:13px">📎 Foto de evidencia (opcional)<input type="file" accept="image/*" style="display:none" onchange="respElegirFoto('${i.id}', this.files[0])"></label>
+      <span id="resp_foto_${i.id}" class="muted" style="font-size:12px"></span>
+    </div>
+    <button class="btn-primary" id="resp_btn_${i.id}" style="width:100%;margin-top:8px" onclick="respEnviar('${i.id}')">Enviar respuesta</button>
+  </div>
+  ${i.respuesta ? `<button class="btn-ghost" style="margin-top:8px;padding:8px 12px;font-size:13px" onclick="document.getElementById('resp_form_${i.id}').style.display='block';this.remove()">Editar respuesta</button>` : ''}`;
+}
+async function respElegirFoto(id, file) {
+  if (!file) return;
+  window.__respFoto = window.__respFoto || {};
+  window.__respFoto[id] = await resizeImage(file, 1600, 0.8);
+  document.getElementById('resp_foto_' + id).textContent = '✓ Foto lista';
+}
+async function respEnviar(id) {
+  const btn = document.getElementById('resp_btn_' + id);
+  const texto = document.getElementById('resp_txt_' + id).value.trim();
+  if (!texto) { alert('Escribe la respuesta.'); return; }
+  if (!confirm('¿Enviar esta respuesta al delegado?')) return;
+  btn.disabled = true; btn.textContent = 'Enviando…';
+  try {
+    await gsCall('responderInformeDelegado', id, texto, (window.__respFoto || {})[id] || '');
+    if (window.__respFoto) delete window.__respFoto[id];
+    if (typeof window.__refrescarInformes === 'function') await window.__refrescarInformes(); else await renderOrg();
+  } catch (e) {
+    btn.disabled = false; btn.textContent = 'Enviar respuesta';
+    alert(e && e.message ? e.message : 'No se pudo enviar la respuesta.');
+  }
+}
+
 function informeDelegadoTarjetaHtml(i, nombreDe) {
   const queja = i.tipo === 'queja';
   return `<div class="card" style="border-left:5px solid ${queja ? '#B3261E' : '#0B5FA5'}">
@@ -840,11 +886,14 @@ function informeDelegadoTarjetaHtml(i, nombreDe) {
     </div>
     <div class="muted" style="font-size:12px;margin-top:4px">Enviado: ${esc(fmtTime(i.ts))}</div>
     <div style="margin-top:6px;white-space:pre-wrap;font-size:14px;line-height:1.45">${esc(i.texto)}</div>
+    ${respuestaHtml(i)}
+    ${formRespuestaHtml(i)}
   </div>`;
 }
 
 // Pestaña "Informes" del organizador: informes del árbitro y de los delegados, por fecha
 async function orgInformesHtml() {
+  window.__refrescarInformes = null;
   const [matches, teams] = await Promise.all([gsCall('getPartidos'), gsCall('getEquipos')]);
   let delegados = [];
   try { delegados = (await gsCall('getInformesDelegado', '')) || []; } catch (e) {}
@@ -1176,8 +1225,8 @@ async function verPartido(matchId) {
     }
     if (cambios.length) {
       h += '<div style="margin-top:10px;border-top:1px solid #eef1ee;padding-top:8px"><div class="muted">Cambios</div>';
-      cambios.sort((a,b)=>a.minuto-b.minuto).forEach(c => {
-        h += `<div style="font-size:13px">${c.minuto}' — sale ${esc(nombreDe[c.saleId]||'—')}, entra ${esc(nombreDe[c.entraId]||'—')}</div>`;
+      cambios.sort((a,b)=>(a.minuto-b.minuto) || (new Date(a.ts)-new Date(b.ts))).forEach(c => {
+        h += `<div style="font-size:13px">${c.minuto ? esc(c.minuto) + "' — " : ''}sale ${esc(nombreDe[c.saleId]||'—')}, entra ${esc(nombreDe[c.entraId]||'—')}</div>`;
       });
       h += '</div>';
     }
@@ -1564,7 +1613,20 @@ async function delegatePartidosHtml() {
   const misPartidos = matches.filter(m => m.equipoA === STATE.team.id || m.equipoB === STATE.team.id)
     .sort((a, b) => (Number(a.jornada) || 0) - (Number(b.jornada) || 0));
   const nombreEquipoDe = {}; teams.forEach(t => nombreEquipoDe[t.id] = t.nombre);
-  let html = `<h2 class="bebas">Partidos — ${esc(STATE.team.nombre)}</h2><p class="sub">Toca un partido para ver el resultado y los detalles, o para enviar tu informe o queja formal.</p>`;
+  let misInformes = [];
+  try { misInformes = (await gsCall('getInformesDelegado', '')) || []; } catch (e) {}
+  const conRespuesta = misInformes.filter(i => i.respuesta);
+  const vista = i => { try { return localStorage.getItem('respVista:' + API_URL + ':' + i.id) === (i.respuestaTs || '1'); } catch (e) { return false; } };
+  const nuevas = conRespuesta.filter(i => !vista(i));
+  const respuestaDe = {}; conRespuesta.forEach(i => { respuestaDe[i.matchId] = vista(i) ? 'vista' : 'nueva'; });
+  let html = '';
+  if (nuevas.length) {
+    html += `<div class="card" style="border:2px solid #2E7D46;background:#E3F3E8">
+      <div style="font-weight:700;color:#2E7D46">📬 Tienes ${nuevas.length} respuesta${nuevas.length === 1 ? '' : 's'} nueva${nuevas.length === 1 ? '' : 's'} del organizador</div>
+      ${nuevas.map(i => { const m = matches.find(x => x.id === i.matchId); return m ? `<button class="btn-ghost" style="width:100%;margin-top:6px" onclick="verPartidoDelegado('${m.id}')">Ver respuesta · ${esc(m.nombre)}</button>` : ''; }).join('')}
+    </div>`;
+  }
+  html += `<h2 class="bebas">Partidos — ${esc(STATE.team.nombre)}</h2><p class="sub">Toca un partido para ver el resultado y los detalles, o para enviar tu informe o queja formal.</p>`;
   if (misPartidos.length === 0) html += '<p class="muted">Aún no tienes partidos programados.</p>';
   misPartidos.forEach(m => {
     const rival = m.equipoA === STATE.team.id ? nombreEquipoDe[m.equipoB] : nombreEquipoDe[m.equipoA];
@@ -1582,6 +1644,7 @@ async function delegatePartidosHtml() {
         ${m.cancha?`<div class="muted">📍 ${esc(m.cancha)}</div>`:''}
       ${m.organizador?`<div class="muted">👤 Organizador: ${esc(m.organizador)}</div>`:''}
         ${m.observaciones?`<div class="muted" style="color:#B8860B">⚠ ${esc(m.observaciones)}</div>`:''}
+        ${respuestaDe[m.id] ? `<div style="font-size:13px;font-weight:600;color:#2E7D46">📬 ${respuestaDe[m.id] === 'nueva' ? 'Respuesta NUEVA del organizador' : 'El organizador respondió tu informe'}</div>` : ''}
       </div>
       ${m.ganadorW
         ? (String(m.ganadorW) === String(STATE.team.id)
@@ -1676,8 +1739,8 @@ async function verPartidoDelegado(matchId) {
     }
     if (cambios.length) {
       h += '<div style="margin-top:10px;border-top:1px solid #eef1ee;padding-top:8px"><div class="muted">Cambios</div>';
-      cambios.sort((a,b)=>a.minuto-b.minuto).forEach(c => {
-        h += `<div style="font-size:13px">${c.minuto}' — sale ${esc(nombreDe[c.saleId]||'—')}, entra ${esc(nombreDe[c.entraId]||'—')}</div>`;
+      cambios.sort((a,b)=>(a.minuto-b.minuto) || (new Date(a.ts)-new Date(b.ts))).forEach(c => {
+        h += `<div style="font-size:13px">${c.minuto ? esc(c.minuto) + "' — " : ''}sale ${esc(nombreDe[c.saleId]||'—')}, entra ${esc(nombreDe[c.entraId]||'—')}</div>`;
       });
       h += '</div>';
     }
@@ -1696,6 +1759,7 @@ async function verPartidoDelegado(matchId) {
 // ---------- Informe general o queja formal del delegado (lo ve solo la organización) ----------
 function claveInfDel(matchId) { return 'infDelegado:' + API_URL + ':' + matchId + ':' + STATE.team.id; }
 function informeDelegadoHtml(matchId, mio) {
+  if (mio && mio.respuesta) { try { localStorage.setItem('respVista:' + API_URL + ':' + mio.id, mio.respuestaTs || '1'); } catch (e) {} }
   let borrador = null;
   try { borrador = JSON.parse(localStorage.getItem(claveInfDel(matchId)) || 'null'); } catch (e) {}
   const tipo = (borrador && borrador.tipo) || (mio && mio.tipo) || 'informe';
@@ -1709,6 +1773,7 @@ function informeDelegadoHtml(matchId, mio) {
     <textarea id="infdel_texto" rows="8" oninput="infDelGuardarBorrador('${matchId}')" placeholder="Escribe aquí…" style="width:100%;padding:12px;border-radius:8px;border:1px solid #d8ded8;font-family:inherit;font-size:16px">${esc(texto)}</textarea>
     <button class="btn-primary" id="infdel_btn" style="width:100%;margin-top:8px" onclick="infDelEnviar('${matchId}')">${mio ? 'Enviar corrección al organizador' : 'Enviar al organizador'}</button>
     <div id="infdel_estado" style="font-size:13px;margin-top:6px;color:#2E7D46">${mio ? `✓ Enviado el ${esc(fmtTime(mio.ts))} como ${mio.tipo === 'queja' ? 'QUEJA FORMAL' : 'INFORME GENERAL'}. Puedes corregirlo y volver a enviarlo.` : ''}</div>
+    ${mio ? respuestaHtml(mio) : ''}
   </div>`;
 }
 function infDelTipo(matchId, tipo) {
@@ -1938,8 +2003,14 @@ async function alineacionCargar() {
   const body = document.getElementById('al_body');
   if (!matchId) { body.innerHTML = ''; return; }
   const lu = await gsCall('getAlineacion', matchId, STATE.team.id);
-  alTitulares = lu ? lu.titulares : [];
-  alSuplentes = lu ? lu.suplentes : [];
+  // Solo se conservan los jugadores que siguen en la planilla. Antes, si un carnet se eliminaba,
+  // su id quedaba escondido en la alineación guardada y el servidor rechazaba la alineación por
+  // "carnet sin autorizar" aunque el jugador ya no se viera en la lista.
+  const vigentes = new Set((window.__alPlayers || []).map(p => p.id));
+  const tAntes = lu ? lu.titulares : [], sAntes = lu ? lu.suplentes : [];
+  alTitulares = tAntes.filter(id => vigentes.has(id));
+  alSuplentes = sAntes.filter(id => vigentes.has(id));
+  window.__alQuitados = (tAntes.length + sAntes.length) - (alTitulares.length + alSuplentes.length);
   window.__alTarjetas = await gsCall('getTarjetasTodas');
   const match = (window.__alMatches || []).find(m => m.id === matchId);
   window.__alJornadaActual = (match && match.jornada !== '' && match.jornada != null) ? Number(match.jornada) : null;
@@ -1975,6 +2046,7 @@ function alineacionRedibujar(matchId, confirmed) {
   const players = window.__alPlayers;
   window.__alHabilitados = {};
   let html = `<div class="muted" style="margin:10px 0">Titulares: ${alTitulares.length}/11 · Suplentes: ${alSuplentes.length}</div>`;
+  if (window.__alQuitados > 0) html += `<div class="card" style="background:#FBF3DC;font-size:13px">Se quitaron ${window.__alQuitados} jugador${window.__alQuitados === 1 ? '' : 'es'} de esta alineación porque su carnet fue eliminado o deshabilitado. Revisa y vuelve a confirmar.</div>`;
   if (players.length === 0) html += '<p class="muted">Agrega jugadores en Planilla primero.</p>';
   players.forEach(p => {
     const isT = alTitulares.includes(p.id), isS = alSuplentes.includes(p.id);
@@ -1987,8 +2059,8 @@ function alineacionRedibujar(matchId, confirmed) {
     else if (est.bloqueado) motivo = est.motivo;
     html += `<div class="card row" style="padding:10px">
       <div style="flex:1;font-size:14px">#${esc(p.numero)} ${esc(p.nombre)} <span class="muted">· ${esc(p.posicion)}</span>${motivo?`<div class="muted" style="color:#B8860B">${esc(motivo)}</div>`:''}</div>
-      <button class="toggle ${isT?'on-t':''}" ${habilitado?'':'disabled'} onclick="alToggle('t','${p.id}','${matchId}',${confirmed})">Titular</button>
-      <button class="toggle ${isS?'on-s':''}" ${habilitado?'':'disabled'} onclick="alToggle('s','${p.id}','${matchId}',${confirmed})">Suplente</button>
+      <button class="toggle ${isT?'on-t':''}" ${habilitado||isT?'':'disabled'} onclick="alToggle('t','${p.id}','${matchId}',${confirmed})">${!habilitado && isT ? 'Quitar' : 'Titular'}</button>
+      <button class="toggle ${isS?'on-s':''}" ${habilitado||isS?'':'disabled'} onclick="alToggle('s','${p.id}','${matchId}',${confirmed})">${!habilitado && isS ? 'Quitar' : 'Suplente'}</button>
     </div>`;
   });
   html += `<button class="btn-primary" style="margin-top:8px" onclick="alConfirmar('${matchId}')">${confirmed?'Actualizar alineación confirmada':'Confirmar alineación'}</button>`;
@@ -1997,7 +2069,12 @@ function alineacionRedibujar(matchId, confirmed) {
 }
 function alToggle(kind, id, matchId, confirmed) {
   const habilitado = (window.__alHabilitados || {})[id];
-  if (!habilitado) return;
+  const yaEsta = alTitulares.includes(id) || alSuplentes.includes(id);
+  if (!habilitado && !yaEsta) return;   // un jugador bloqueado no se puede AGREGAR, pero sí QUITAR
+  if (!habilitado && yaEsta) {
+    alTitulares = alTitulares.filter(x => x !== id); alSuplentes = alSuplentes.filter(x => x !== id);
+    alineacionRedibujar(matchId, confirmed); return;
+  }
   if (kind === 't') {
     if (alTitulares.includes(id)) alTitulares = alTitulares.filter(x=>x!==id);
     else if (!alSuplentes.includes(id) && alTitulares.length < 11) alTitulares.push(id);
@@ -2068,36 +2145,71 @@ async function enVivoCargar() {
   // Además, un titular cuarentón que ya salió también puede volver a entrar (los titulares normales no)
   const titularesReingresan = lu.titulares.filter(id => !enCancha.has(id) && cuarentonDe[id]);
   const puedenEntrar = [...banca, ...titularesReingresan];
+  // Cambios rápidos: se tocan los que SALEN y los que ENTRAN; se emparejan en el orden en que se tocan.
+  window.__evMatchId = matchId; window.__evSale = []; window.__evEntra = [];
+  window.__evNombre = {}; players.forEach(p => { window.__evNombre[p.id] = '#' + p.numero + ' ' + p.nombre; });
+  const boton = (id, lado) => `<button class="btn-ghost" id="ev_${lado}_${id}" style="width:100%;text-align:left;padding:10px;font-size:14px;margin-bottom:6px" onclick="evTocar('${lado}','${id}')">
+      <span class="ev-num" style="display:inline-block;min-width:22px;font-weight:700"></span>${esc(window.__evNombre[id] || '—')}${lado === 'entra' && cuarentonDe[id] ? ' <span class="muted">(cuarentón)</span>' : ''}</button>`;
   let html = `<div class="card">
-    <div class="muted" style="margin-bottom:8px">Registrar cambio</div>
-    <select id="ev_out"><option value="">Sale…</option>${disponibles.map(id=>`<option value="${id}">${esc(nombreDe[id]||'—')}</option>`).join('')}</select>
-    <select id="ev_in"><option value="">Entra…</option>${puedenEntrar.map(id=>`<option value="${id}">${esc(nombreDe[id]||'—')}${cuarentonDe[id]?' (cuarentón)':''}</option>`).join('')}</select>
-    <input id="ev_min" type="number" placeholder="Minuto">
-    <button class="btn-primary" id="ev_btn_registrar" onclick="enVivoRegistrar('${matchId}')">Registrar cambio</button>
+    <div style="font-weight:700;font-size:16px">🔄 Registrar cambios</div>
+    <p class="muted" style="font-size:13px;margin:4px 0 10px">Toca quién <strong>SALE</strong> y quién <strong>ENTRA</strong>. Puedes hacer varios cambios a la vez: se emparejan en el orden en que los tocas (1 con 1, 2 con 2…).</p>
+    <div class="grid2" style="align-items:start">
+      <div><div class="lbl" style="color:#B3261E">⬇️ Sale (en cancha)</div>${disponibles.map(id => boton(id, 'sale')).join('') || '<p class="muted">—</p>'}</div>
+      <div><div class="lbl" style="color:#2E7D46">⬆️ Entra</div>${puedenEntrar.map(id => boton(id, 'entra')).join('') || '<p class="muted">No hay suplentes disponibles.</p>'}</div>
+    </div>
+    <div id="ev_pares" style="margin:6px 0"></div>
+    <button class="btn-primary" id="ev_btn_registrar" style="width:100%" disabled onclick="evRegistrar()">Registrar cambios</button>
   </div>
   <div class="muted" style="margin:10px 0 6px">Historial del partido</div>`;
   if (log.length === 0) html += '<p class="muted">Sin cambios registrados aún.</p>';
-  log.sort((a,b)=>a.minuto-b.minuto).forEach(c => {
-    html += `<div class="card">${c.minuto}' — sale ${esc(nombreDe[c.saleId]||'—')}, entra ${esc(nombreDe[c.entraId]||'—')}</div>`;
+  log.sort((a,b)=>(a.minuto-b.minuto) || (new Date(a.ts)-new Date(b.ts))).forEach(c => {
+    html += `<div class="card"><span class="muted" style="font-size:12px">${esc(fmtTime(c.ts))}</span><br>⬇️ Sale ${esc(nombreDe[c.saleId]||'—')} · ⬆️ Entra ${esc(nombreDe[c.entraId]||'—')}</div>`;
   });
   body.innerHTML = html;
 }
-async function enVivoRegistrar(matchId) {
-  const outId = document.getElementById('ev_out').value, inId = document.getElementById('ev_in').value, minuto = document.getElementById('ev_min').value;
-  if (!outId || !inId || !minuto) return;
+
+function evTocar(lado, id) {
+  const lista = lado === 'sale' ? window.__evSale : window.__evEntra;
+  const i = lista.indexOf(id);
+  if (i >= 0) lista.splice(i, 1); else lista.push(id);
+  evPintar();
+}
+function evPintar() {
+  ['sale', 'entra'].forEach(lado => {
+    const lista = lado === 'sale' ? window.__evSale : window.__evEntra;
+    document.querySelectorAll(`[id^="ev_${lado}_"]`).forEach(b => {
+      const id = b.id.slice(`ev_${lado}_`.length), n = lista.indexOf(id);
+      b.style.background = n >= 0 ? (lado === 'sale' ? '#FBEAE9' : '#E3F3E8') : 'transparent';
+      b.style.borderColor = n >= 0 ? (lado === 'sale' ? '#B3261E' : '#2E7D46') : '#c7d2c9';
+      b.style.borderWidth = n >= 0 ? '2px' : '1px';
+      b.querySelector('.ev-num').textContent = n >= 0 ? (n + 1) + '.' : '';
+    });
+  });
+  const s = window.__evSale, e = window.__evEntra, nom = window.__evNombre || {};
+  const pares = Math.min(s.length, e.length);
+  let txt = '';
+  for (let i = 0; i < Math.max(s.length, e.length); i++) {
+    txt += `<div style="font-size:13px;padding:4px 0;border-bottom:1px solid #eef1ee">${i + 1}. ⬇️ ${s[i] ? esc(nom[s[i]]) : '<span class="muted">falta quién sale</span>'} → ⬆️ ${e[i] ? esc(nom[e[i]]) : '<span class="muted">falta quién entra</span>'}</div>`;
+  }
+  document.getElementById('ev_pares').innerHTML = txt;
   const btn = document.getElementById('ev_btn_registrar');
-  if (btn.disabled) return;
+  const listo = s.length > 0 && s.length === e.length;
+  btn.disabled = !listo;
+  btn.textContent = listo ? `Registrar ${pares} cambio${pares === 1 ? '' : 's'}` : (s.length || e.length ? 'Marca la misma cantidad que sale y que entra' : 'Registrar cambios');
+}
+async function evRegistrar() {
+  const btn = document.getElementById('ev_btn_registrar');
+  const s = window.__evSale, e = window.__evEntra, nom = window.__evNombre || {};
+  if (!s.length || s.length !== e.length || btn.disabled) return;
+  const pares = s.map((id, i) => [id, e[i]]);
+  if (!confirm('¿Registrar estos cambios?\n\n' + pares.map(([a, b], i) => `${i + 1}. Sale ${nom[a]} → Entra ${nom[b]}`).join('\n'))) return;
   btn.disabled = true; btn.textContent = 'Registrando…';
   try {
-    // las dos lecturas ya no se esperan una tras otra: se piden a la vez (ambas salen de la memoria, instantáneas)
-    const [players, matches] = await Promise.all([gsCall('getJugadores', STATE.team.id), gsCall('getPartidos')]);
-    const nombreDe = {}; players.forEach(p=>nombreDe[p.id]=p.nombre);
-    const m = matches.find(x=>x.id===matchId);
-    await gsCall('addCambio', matchId, STATE.team.id, outId, inId, Number(minuto), STATE.team.nombre, m.nombre, nombreDe[outId], nombreDe[inId]);
+    await gsCall('addCambiosLote', window.__evMatchId, STATE.team.id, pares);
     enVivoCargar();
-  } catch (e) {
-    btn.disabled = false; btn.textContent = 'Registrar cambio';
-    alert(e && e.message ? e.message : 'No se pudo registrar el cambio.');
+  } catch (err) {
+    btn.disabled = false; evPintar();
+    alert(err && err.message ? err.message : 'No se pudieron registrar los cambios.');
   }
 }
 
