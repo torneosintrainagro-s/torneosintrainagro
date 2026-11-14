@@ -37,6 +37,7 @@
   table.resumen th { background:#123626; color:#fff; font-size:11px; text-transform:uppercase; letter-spacing:.03em; }
   table.resumen td:nth-child(2), table.resumen th:nth-child(2) { text-align:left; white-space:normal; }
   table.resumen tbody tr:nth-child(odd) { background:#F7FAF7; }
+  table.tabla-cobros th, table.tabla-cobros td { padding:6px 3px; font-size:11px; }
   .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
   .stack { display:flex; flex-direction:column; gap:10px; }
   .photo { width:80px; height:80px; border-radius:10px; background:#dfe7e0; flex-shrink:0; overflow:hidden; display:flex; align-items:center; justify-content:center; }
@@ -1345,7 +1346,9 @@ function resumenCobrosHtml(tarjetas, teams, players, matches) {
   const filasOrg = grupos.map(o => {
     const l = pagadas.filter(t => (t.cobradoPor || '') === o);
     if (l.length === 0 && o === '') return '';
-    return `<tr><td>${o ? esc(o) : '<span class="muted">Sin registrar</span>'}</td><td>${cuenta(l, 'amarilla')}</td><td>${cuenta(l, 'roja')}</td><td><strong>${pesos(suma(l))}</strong></td></tr>`;
+    const ent = l.filter(t => t.liquidada), mano = l.filter(t => !t.liquidada);
+    return `<tr><td>${o ? esc(o) : '<span class="muted">Sin registrar</span>'}</td><td>${cuenta(l, 'amarilla')}</td><td>${cuenta(l, 'roja')}</td><td><strong>${pesos(suma(l))}</strong></td>
+      <td style="color:#2E7D46">${pesos(suma(ent))}</td><td style="color:${mano.length ? '#B8860B' : '#8a978d'};font-weight:600">${pesos(suma(mano))}</td></tr>`;
   }).join('');
   // Pendiente, por responsable (el organizador a cargo del partido)
   const filasPend = grupos.map(o => {
@@ -1357,8 +1360,18 @@ function resumenCobrosHtml(tarjetas, teams, players, matches) {
   const detalle = [...pagadas].sort((a, b) => String(b.cobradoEn || '').localeCompare(String(a.cobradoEn || ''))).map(t =>
     `<div style="padding:6px 0;border-bottom:1px solid #eef1ee;font-size:13px">
       ${t.tipo === 'roja' ? '🟥' : '🟨'} <strong>${pesos(valorDeTarjeta(t))}</strong> · ${esc(nombreJ[t.jugadorId] || '—')} (${esc(nombreEq[t.equipoId] || '')})
-      <div class="muted" style="font-size:12px">Cobró: ${t.cobradoPor ? esc(t.cobradoPor) : 'sin registrar'}${t.cobradoEn ? ' · ' + esc(fmtTime(t.cobradoEn)) : ''}</div>
+      <div class="muted" style="font-size:12px">Cobró: ${t.cobradoPor ? esc(t.cobradoPor) : 'sin registrar'}${t.cobradoEn ? ' · ' + esc(fmtTime(t.cobradoEn)) : ''}
+        · ${t.liquidada ? `<span style="color:#2E7D46">✅ Entregada${t.liquidadaEn ? ' ' + esc(fmtTime(t.liquidadaEn)) : ''}</span>` : '<span style="color:#B8860B">💰 En mano</span>'}</div>
     </div>`).join('') || '<p class="muted">Todavía no hay cobros registrados.</p>';
+  // Plata en mano de cada organizador (cobrado y todavía no liquidado)
+  const enMano = o => pagadas.filter(t => (t.cobradoPor || '') === o && !t.liquidada);
+  const yo = window.__cobrador ? window.__cobrador.nombre : '';
+  const miMano = yo ? enMano(yo) : [];
+  const bloqueLiquidar = yo ? `<div style="margin:10px 0;padding:10px;border-radius:10px;background:${miMano.length ? '#FBF3DC' : '#E3F3E8'}">
+      <div style="font-weight:700">${esc(yo)}, tienes en la mano: ${pesos(suma(miMano))}</div>
+      <div class="muted" style="font-size:12px">${miMano.length} tarjeta${miMano.length === 1 ? '' : 's'} cobrada${miMano.length === 1 ? '' : 's'} sin entregar</div>
+      ${miMano.length ? `<button class="btn-primary" style="width:100%;margin-top:8px" onclick="orgLiquidar()">💵 Liquidar ${pesos(suma(miMano))} (ya entregué la plata)</button>` : ''}
+    </div>` : '';
 
   return `<div class="card" style="border:2px solid #2E7D46">
     <div style="font-weight:700;font-size:16px">💰 Cobros de tarjetas</div>
@@ -1375,8 +1388,9 @@ function resumenCobrosHtml(tarjetas, teams, players, matches) {
         <div class="muted" style="font-size:12px">${cuenta(pendientes, 'amarilla')} amarillas · ${cuenta(pendientes, 'roja')} rojas</div>
       </div>
     </div>
+    ${bloqueLiquidar}
     <div style="font-weight:600;font-size:14px;margin:4px 0">Cobrado por cada organizador</div>
-    <div style="overflow-x:auto"><table class="resumen"><thead><tr><th>Organizador</th><th>🟨</th><th>🟥</th><th>Total</th></tr></thead><tbody>${filasOrg}</tbody></table></div>
+    <div style="overflow-x:auto"><table class="resumen tabla-cobros"><thead><tr><th>Organizador</th><th>🟨</th><th>🟥</th><th>Cobró</th><th>Entregó</th><th>En mano</th></tr></thead><tbody>${filasOrg}</tbody></table></div>
     ${filasPend ? `<div style="font-weight:600;font-size:14px;margin:12px 0 4px">Falta por cobrar (según el organizador a cargo del partido)</div>
     <div style="overflow-x:auto"><table class="resumen"><thead><tr><th>Responsable</th><th>🟨</th><th>🟥</th><th>Total</th></tr></thead><tbody>${filasPend}</tbody></table></div>` : ''}
     <div class="row" style="padding:10px 0 0;cursor:pointer" onclick="const d=document.getElementById('detCobros');d.style.display=d.style.display==='none'?'block':'none'">
@@ -1436,9 +1450,10 @@ function tarjetasListaHtml(tarjetas) {
       ${pagada ? `<div style="margin-top:10px;padding:8px 10px;border-radius:8px;background:#E3F3E8;color:#2E7D46;font-size:14px;font-weight:600">
           ✅ PAGADA · ${pesos(valorDeTarjeta(t))}
           <div style="font-weight:400;font-size:13px">Cobró: <strong>${t.cobradoPor ? esc(t.cobradoPor) : 'sin registrar'}</strong>${t.cobradoEn ? ' · ' + esc(fmtTime(t.cobradoEn)) : ''}</div>
+          <div style="font-weight:400;font-size:13px">${t.liquidada ? '✅ Plata entregada (liquidada)' + (t.liquidadaEn ? ' · ' + esc(fmtTime(t.liquidadaEn)) : '') : '💰 Plata en mano de quien cobró'}</div>
         </div>
         <div class="row" style="margin-top:8px;gap:8px">
-          <button class="btn-ghost" style="padding:8px 12px;font-size:14px" onclick="orgDeshacerPago('${t.id}')">Deshacer pago</button>
+          ${t.liquidada ? '' : `<button class="btn-ghost" style="padding:8px 12px;font-size:14px" onclick="orgDeshacerPago('${t.id}')">Deshacer pago</button>`}
           <button class="btn-ghost" style="padding:8px 12px;font-size:14px;color:#B3261E" onclick="orgEliminarTarjeta('${t.id}')">Eliminar</button>
         </div>`
       : `<div class="row" style="margin-top:10px;align-items:center;gap:8px;flex-wrap:wrap">
@@ -1475,6 +1490,18 @@ async function orgCobrar(id) {
     refrescarTarjetas();
   } catch (e) {
     alert(e && e.message ? e.message : 'No se pudo registrar el cobro.');
+  }
+}
+
+async function orgLiquidar() {
+  const c = window.__cobrador; if (!c) { renderOrg(); return; }
+  if (!confirm(`${c.nombre}: ¿confirmas que ya ENTREGASTE toda la plata que tienes en la mano?\n\nEsas tarjetas quedan como "Entregadas". El total cobrado no cambia.`)) return;
+  try {
+    const r = await gsCall('liquidarCobros', c.pin);
+    alert(`Listo: liquidaste ${pesos(r && r.total)}.`);
+    refrescarTarjetas();
+  } catch (e) {
+    alert(e && e.message ? e.message : 'No se pudo liquidar.');
   }
 }
 
@@ -1533,7 +1560,7 @@ function documentosHtml(p) {
   };
   return `<div style="margin-top:10px;border-top:1px solid #eef1ee;padding-top:10px">
     <div style="font-weight:600;font-size:14px;margin-bottom:6px">Documentos <span class="muted" style="font-weight:400;font-size:12px">(solo los ve el organizador · toca la foto para verla en grande)</span></div>
-    <div class="row" style="gap:10px;align-items:flex-start">${caja('cedula', 'Cédula')}${caja('planilla', 'Planilla')}</div>
+    <div class="row" style="gap:10px;align-items:flex-start">${caja('cedula', 'Cédula')}${caja('planilla', p.refuerzo ? 'Planilla del familiar' : 'Planilla')}</div>
   </div>`;
 }
 
@@ -1871,6 +1898,21 @@ async function planillaHtml() {
       <label class="btn-ghost">Tomar foto<input type="file" accept="image/*" capture="environment" style="display:none" onchange="onPhotoChosen(this.files[0])"></label>
       <label class="btn-ghost">Subir archivo<input type="file" accept="image/*" style="display:none" onchange="onPhotoChosen(this.files[0])"></label>
     </div>
+    <div id="docsForm" style="margin-bottom:10px">
+      <label class="lbl">Foto de la cédula del trabajador <span class="req">*</span></label>
+      <div class="row" style="flex-wrap:wrap;gap:8px;margin-bottom:8px">
+        <div class="photo" id="prevDocCedula" style="width:64px;height:64px"></div>
+        <label class="btn-ghost">Tomar foto<input type="file" accept="image/*" capture="environment" style="display:none" onchange="onDocChosen('cedula', this.files[0])"></label>
+        <label class="btn-ghost">Subir archivo<input type="file" accept="image/*" style="display:none" onchange="onDocChosen('cedula', this.files[0])"></label>
+      </div>
+      <label class="lbl"><span id="lblPlanilla">Planilla de trabajo</span> <span class="req">*</span></label>
+      <div class="row" style="flex-wrap:wrap;gap:8px">
+        <div class="photo" id="prevDocPlanilla" style="width:64px;height:64px"></div>
+        <label class="btn-ghost">Tomar foto<input type="file" accept="image/*" capture="environment" style="display:none" onchange="onDocChosen('planilla', this.files[0])"></label>
+        <label class="btn-ghost">Subir archivo<input type="file" accept="image/*" style="display:none" onchange="onDocChosen('planilla', this.files[0])"></label>
+      </div>
+      <div id="docsNota" class="muted" style="font-size:12px;margin-top:4px"></div>
+    </div>
     <p class="muted" style="font-size:13px;margin:0 0 6px">Los campos con <span style="color:#B3261E">*</span> son obligatorios.</p>
     <label class="lbl" for="p_nombre">Nombres y apellidos completos <span class="req">*</span></label>
     <input id="p_nombre" placeholder="EJ: JUAN CAMILO PEÑA LÓPEZ">
@@ -1885,7 +1927,7 @@ async function planillaHtml() {
     <label class="lbl" for="p_cuarenton">¿Es cuarentón (mayor de 40 años)? <span class="req">*</span></label>
     <select id="p_cuarenton"><option value="">Elige…</option><option value="si">SÍ, es cuarentón</option><option value="no">NO</option></select>
     <label class="lbl" for="p_refuerzo">¿Es jugador de refuerzo? <span class="req">*</span></label>
-    <select id="p_refuerzo"><option value="">Elige…</option><option value="si">SÍ, es refuerzo</option><option value="no">NO</option></select>
+    <select id="p_refuerzo" onchange="actualizarLblPlanilla()"><option value="">Elige…</option><option value="si">SÍ, es refuerzo</option><option value="no">NO</option></select>
     <div id="p_error" style="color:#B3261E;font-size:13px;margin-bottom:8px"></div>
     <button class="btn-primary" onclick="savePlayer()">Guardar</button>
     <button class="btn-ghost" onclick="document.getElementById('playerForm').style.display='none'; document.getElementById('addPlayerBtn').style.display='block';">Cancelar</button>
@@ -1893,13 +1935,31 @@ async function planillaHtml() {
   return html;
 }
 
-let editingId = null, currentPhoto = null;
+let editingId = null, currentPhoto = null, currentDocCedula = null, currentDocPlanilla = null;
+// Si es refuerzo, la planilla es la del FAMILIAR
+function actualizarLblPlanilla() {
+  const el = document.getElementById('lblPlanilla'); if (!el) return;
+  el.textContent = document.getElementById('p_refuerzo').value === 'si' ? 'Planilla del familiar (es refuerzo)' : 'Planilla de trabajo';
+}
+function limpiarDocsForm(nota) {
+  currentDocCedula = null; currentDocPlanilla = null;
+  document.getElementById('prevDocCedula').innerHTML = ''; document.getElementById('prevDocPlanilla').innerHTML = '';
+  document.getElementById('docsNota').textContent = nota || '';
+  actualizarLblPlanilla();
+}
+async function onDocChosen(tipo, file) {
+  if (!file) return;
+  const foto = await resizeImage(file, 1600, 0.8);   // grande y nítida, para poder leerla
+  if (tipo === 'cedula') currentDocCedula = foto; else currentDocPlanilla = foto;
+  document.getElementById(tipo === 'cedula' ? 'prevDocCedula' : 'prevDocPlanilla').innerHTML = `<img src="${foto}">`;
+}
 function showPlayerForm() {
   editingId = null; currentPhoto = null;
   ['p_nombre','p_doc','p_num'].forEach(id => document.getElementById(id).value='');
   document.getElementById('p_pos').value='';
   document.getElementById('p_estado').value='habilitado'; document.getElementById('p_cuarenton').value=''; document.getElementById('p_refuerzo').value='';
   document.getElementById('photoPreview').innerHTML=''; document.getElementById('p_error').innerText='';
+  limpiarDocsForm('');
   document.getElementById('playerForm').style.display='block';
   document.getElementById('addPlayerBtn').style.display='none';
 }
@@ -1917,6 +1977,7 @@ async function editPlayer(id) {
   document.getElementById('p_refuerzo').value = p.refuerzo ? 'si' : 'no';
   document.getElementById('photoPreview').innerHTML = p.fotoUrl ? `<img src="${esc(p.fotoUrl)}">` : '';
   document.getElementById('p_error').innerText = '';
+  limpiarDocsForm(`Ya subidas: cédula ${p.tieneDocCedula ? '✓' : '✗'} · planilla ${p.tieneDocPlanilla ? '✓' : '✗'}. Solo sube una foto nueva si la quieres cambiar.`);
   document.getElementById('playerForm').style.display = 'block';
   document.getElementById('addPlayerBtn').style.display = 'none';
 }
@@ -1942,6 +2003,8 @@ async function savePlayer() {
   if (!cuarentonSel) faltan.push('si es cuarentón');
   if (!refuerzoSel) faltan.push('si es refuerzo');
   if (!editingId && !currentPhoto) faltan.unshift('la foto del jugador');
+  if (!editingId && !currentDocCedula) faltan.push('la foto de la cédula');
+  if (!editingId && !currentDocPlanilla) faltan.push(refuerzoSel === 'si' ? 'la planilla del familiar' : 'la planilla de trabajo');
   if (faltan.length) { errEl.innerText = 'Falta llenar: ' + faltan.join(', ') + '.'; return; }
   if (!/^\d{5,12}$/.test(docId)) { errEl.innerText = 'La cédula debe tener solo números, sin puntos ni letras.'; return; }
   const n = Number(numero);
@@ -1953,7 +2016,9 @@ async function savePlayer() {
     numero: String(n),
     posicion, estado: document.getElementById('p_estado').value,
     cuarenton: cuarentonSel === 'si',
-    refuerzo: refuerzoSel === 'si'
+    refuerzo: refuerzoSel === 'si',
+    docCedulaFoto: currentDocCedula || '',
+    docPlanillaFoto: currentDocPlanilla || ''
   };
   // Aviso ANTES de guardar: si el jugador ya está autorizado y se le cambia el nombre, la cédula o la foto,
   // vuelve a quedar pendiente de autorización (el servidor lo aplica de todas formas).
@@ -1966,7 +2031,7 @@ async function savePlayer() {
   try {
     const r = await gsCall('guardarJugador', STATE.team.id, jugador, currentPhoto, STATE.team.nombre);
     renderDelegate();
-    if (esNuevo) alert('Jugador guardado. Queda "Pendiente de autorización" hasta que el organizador lo autorice — solo entonces podrás alinearlo en un partido.');
+    if (esNuevo) alert('Carnet creado. Queda "Pendiente de autorización".\n\nAvísale al organizador para que revise la foto, la cédula y la planilla y lo autorice. Solo entonces podrás alinearlo.');
     else if (r && r.volvioARevision) alert('Cambios guardados. El jugador quedó "Pendiente de autorización" hasta que el organizador lo revise de nuevo.');
   } catch (e) {
     document.getElementById('p_error').innerText = (e && e.message) ? e.message : 'No se pudo guardar.';
