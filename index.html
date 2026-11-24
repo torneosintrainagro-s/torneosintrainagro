@@ -46,7 +46,7 @@
   .lightbox { position:fixed; inset:0; background:rgba(10,20,15,.9); z-index:100; display:flex; align-items:center; justify-content:center; padding:24px; }
   .lightbox img { max-width:100%; max-height:100%; border-radius:14px; }
   .tabbar { position:fixed; bottom:0; left:0; right:0; background:#fff; border-top:1px solid #e2e8e3; display:flex; z-index:20; }
-  .tabbar button { flex:1; border:none; background:transparent; padding:10px 4px 12px; font-size:13px; font-weight:600; color:#8a978d; cursor:pointer; }
+  .tabbar button { flex:1; min-width:0; border:none; background:transparent; padding:10px 1px 12px; font-size:11px; line-height:1.2; font-weight:600; color:#8a978d; cursor:pointer; }
   .tabbar button.active { color:#123626; }
   .row { display:flex; gap:10px; align-items:center; }
   .toggle { border:none; border-radius:20px; padding:8px 12px; font-size:14px; font-weight:600; background:#eef1ee; color:#5b6b62; cursor:pointer; }
@@ -174,7 +174,7 @@ const LECTURAS = {
   }
 };
 // Acciones que solo leen: no invalidan la foto
-const SOLO_LECTURA = new Set([...Object.keys(LECTURAS), 'verificarPin', 'getTodo', 'iniciarSesion', 'getDocumentosEquipo', 'getInformesDelegado', 'identificarCobrador']);
+const SOLO_LECTURA = new Set([...Object.keys(LECTURAS), 'verificarPin', 'getTodo', 'iniciarSesion', 'getDocumentosEquipo', 'getInformesDelegado', 'identificarCobrador', 'getMultas']);
 
 function gsCall(fn, ...args) {
   if (LECTURAS[fn] && !SNAP_OFF) {
@@ -217,9 +217,24 @@ const CANCHAS = ['Cancha la Agrícola', 'Cancha la Floresta', 'Cancha Unidad Dep
 // Organizadores que pueden quedar a cargo de un partido (y responsables de cobrar sus tarjetas)
 const ORGANIZADORES = ['CABO (ALBERTO)', 'EVER', 'CLAUDIA'];
 // Valor de cada tarjeta (lo que se cobra)
-const VALOR_TARJETA = { amarilla: 5000, roja: 10000 };
+const VALOR_TARJETA = { amarilla: 5000, roja: 10000 };          // hasta el 20 de nov. de 2026
+const VALOR_TARJETA_NUEVO = { amarilla: 7000, roja: 15000 };    // desde el sábado 21 de nov. de 2026
+const FECHA_PRECIO_NUEVO = '2026-11-21';
 function pesos(n) { return '$' + (Number(n) || 0).toLocaleString('es-CO'); }
-function valorDeTarjeta(t) { return (t.valor !== null && t.valor !== undefined && t.valor !== '') ? Number(t.valor) : (VALOR_TARJETA[t.tipo] || 0); }
+// Día en que se sacó la tarjeta: el día del partido; si el partido no tiene día, el día en que se registró (hora Colombia)
+function fechaDeTarjeta(t) {
+  const partidos = (SNAP && SNAP.data && SNAP.data.partidos) || Object.values(window.__matchesData || {});
+  const p = partidos.find(x => String(x.id) === String(t.matchId));
+  if (p && /^\d{4}-\d{2}-\d{2}/.test(String(p.fecha || ''))) return String(p.fecha).slice(0, 10);
+  const d = new Date(t.ts || Date.now());
+  return new Date(d.getTime() - 5 * 3600 * 1000).toISOString().slice(0, 10);
+}
+// Si ya se cobró, vale lo que se cobró. Si no, según la fecha en que se sacó (multas: el valor escrito).
+function valorDeTarjeta(t) {
+  if (t.valor !== null && t.valor !== undefined && t.valor !== '') return Number(t.valor);
+  const tabla = fechaDeTarjeta(t) >= FECHA_PRECIO_NUEVO ? VALOR_TARJETA_NUEVO : VALOR_TARJETA;
+  return tabla[t.tipo] || 0;
+}
 const STATUS = {
   habilitado: {label:'Habilitado', color:'#2E7D46', bg:'#E7F3EA'},
   suspendido: {label:'Suspendido', color:'#B3261E', bg:'#FBEAE9'},
@@ -426,7 +441,7 @@ async function entrarAutomatico() {
 
 // ================= ORGANIZADOR =================
 async function renderOrg() {
-  const tabs = [['resumen','Resumen'],['equipos','Equipos'],['carnets','Carnets'],['partidos','Partidos'],['tarjetas','Tarjetas'],['informes','Informes']];
+  const tabs = [['resumen','Resumen'],['equipos','Equipos'],['carnets','Carnets'],['partidos','Partidos'],['tarjetas','Amonest. y multas'],['informes','Informes']];
   app.innerHTML = '<div id="content"></div>' + tabBarHtml(tabs, STATE.tab, 'renderOrg');
   const content = document.getElementById('content');
   if (STATE.tab === 'resumen') content.innerHTML = await orgResumenHtml();
@@ -1244,14 +1259,19 @@ async function verPartido(matchId) {
 async function orgTarjetasHtml() {
   window.__tarjEquipoActual = null;
   const [tarjetas, teams, playersTodos, matchesTodos] = await Promise.all([gsCall('getTarjetasTodas'), gsCall('getEquipos'), gsCall('getJugadoresTodos'), gsCall('getPartidos')]);
+  let multas = [];
+  try { multas = (await gsCall('getMultas')) || []; } catch (e) {}
+  window.__multasData = { multas, teams, matches: matchesTodos };
   const estaPagada = t => t.pagada === true || String(t.pagada).toUpperCase() === 'TRUE';
   const totalAmarillas = tarjetas.filter(t => t.tipo === 'amarilla').length;
   const totalRojas = tarjetas.filter(t => t.tipo === 'roja').length;
   const totalPagadas = tarjetas.filter(estaPagada).length;
   const totalPendientes = tarjetas.length - totalPagadas;
 
-  let html = bannerCobradorHtml() + `<h2 class="bebas">Amonestaciones</h2><p class="sub">Elige un equipo para ver sus tarjetas, fijar sanciones y registrar los cobros.</p>`;
-  html += resumenCobrosHtml(tarjetas, teams, playersTodos, matchesTodos);
+  let html = bannerCobradorHtml() + `<h2 class="bebas">Amonestaciones y multas</h2><p class="sub">Registra multas, cobra tarjetas y multas, y liquida la plata que tienes en la mano.</p>`;
+  html += resumenCobrosHtml(tarjetas, teams, playersTodos, matchesTodos, multas);
+  html += multasSeccionHtml(multas, teams, matchesTodos);
+  html += `<div style="font-weight:700;font-size:16px;margin:16px 0 8px">🟨🟥 Tarjetas por equipo</div>`;
 
   html += `<div class="grid2" style="margin-bottom:12px">
     <div class="card" style="text-align:center;padding:10px">
@@ -1300,12 +1320,12 @@ async function orgTarjetasHtml() {
 // ---------- Entrada a TARJETAS con el PIN personal de cada organizador ----------
 // Cabo, Ever y Claudia tienen cada uno su PIN. Todo cobro queda a nombre de quien entró.
 function cobradorGateHtml(error) {
-  return `<h2 class="bebas">Tarjetas</h2>
-    <p class="sub">Para entrar a Tarjetas, ingresa <strong>tu PIN personal</strong>. Todo cobro que registres quedará a tu nombre.</p>
+  return `<h2 class="bebas">Amonestaciones y multas</h2>
+    <p class="sub">Para entrar, ingresa <strong>tu PIN personal</strong>. Todo cobro o multa que registres quedará a tu nombre.</p>
     <div class="card">
       <input id="pinCobrador" class="pin-input" maxlength="6" inputmode="numeric" placeholder="••••" onkeydown="if(event.key==='Enter') orgEntrarTarjetas()">
       <div id="pinCobradorError" style="color:#B3261E;font-size:13px;margin-bottom:8px">${error ? esc(error) : ''}</div>
-      <button class="btn-primary" id="pinCobradorBtn" onclick="orgEntrarTarjetas()">Entrar a Tarjetas</button>
+      <button class="btn-primary" id="pinCobradorBtn" onclick="orgEntrarTarjetas()">Entrar</button>
     </div>`;
 }
 async function orgEntrarTarjetas() {
@@ -1332,7 +1352,9 @@ function bannerCobradorHtml() {
 }
 
 // ---------- Resumen de cobros: cuánto se ha cobrado, quién lo cobró y cuánto falta ----------
-function resumenCobrosHtml(tarjetas, teams, players, matches) {
+function resumenCobrosHtml(tarjetasSolas, teams, players, matches, multas) {
+  // Tarjetas y multas suman juntas (una multa trae su valor escrito)
+  const tarjetas = [...tarjetasSolas, ...(multas || []).map(m => Object.assign({}, m, { tipo: 'multa' }))];
   const pagadas = tarjetas.filter(t => t.pagada === true || String(t.pagada).toUpperCase() === 'TRUE');
   const pendientes = tarjetas.filter(t => !(t.pagada === true || String(t.pagada).toUpperCase() === 'TRUE'));
   const suma = lista => lista.reduce((s, t) => s + valorDeTarjeta(t), 0);
@@ -1347,19 +1369,20 @@ function resumenCobrosHtml(tarjetas, teams, players, matches) {
     const l = pagadas.filter(t => (t.cobradoPor || '') === o);
     if (l.length === 0 && o === '') return '';
     const ent = l.filter(t => t.liquidada), mano = l.filter(t => !t.liquidada);
-    return `<tr><td>${o ? esc(o) : '<span class="muted">Sin registrar</span>'}</td><td>${cuenta(l, 'amarilla')}</td><td>${cuenta(l, 'roja')}</td><td><strong>${pesos(suma(l))}</strong></td>
+    return `<tr><td>${o ? esc(o) : '<span class="muted">Sin registrar</span>'}</td><td><strong>${pesos(suma(l))}</strong></td>
       <td style="color:#2E7D46">${pesos(suma(ent))}</td><td style="color:${mano.length ? '#B8860B' : '#8a978d'};font-weight:600">${pesos(suma(mano))}</td></tr>`;
   }).join('');
   // Pendiente, por responsable (el organizador a cargo del partido)
   const filasPend = grupos.map(o => {
     const l = pendientes.filter(t => (orgDe[t.matchId] || '') === o);
     if (l.length === 0) return '';
-    return `<tr><td>${o ? esc(o) : '<span class="muted">Sin organizador</span>'}</td><td>${cuenta(l, 'amarilla')}</td><td>${cuenta(l, 'roja')}</td><td><strong>${pesos(suma(l))}</strong></td></tr>`;
+    return `<tr><td>${o ? esc(o) : '<span class="muted">Sin organizador</span>'}</td><td>${cuenta(l, 'amarilla')}</td><td>${cuenta(l, 'roja')}</td><td>${cuenta(l, 'multa')}</td><td><strong>${pesos(suma(l))}</strong></td></tr>`;
   }).join('');
   // Detalle de cada cobro (más reciente primero)
   const detalle = [...pagadas].sort((a, b) => String(b.cobradoEn || '').localeCompare(String(a.cobradoEn || ''))).map(t =>
     `<div style="padding:6px 0;border-bottom:1px solid #eef1ee;font-size:13px">
-      ${t.tipo === 'roja' ? '🟥' : '🟨'} <strong>${pesos(valorDeTarjeta(t))}</strong> · ${esc(nombreJ[t.jugadorId] || '—')} (${esc(nombreEq[t.equipoId] || '')})
+      ${t.tipo === 'multa' ? `⚠️ <strong>${pesos(valorDeTarjeta(t))}</strong> · Multa ${esc(nombreEq[t.equipoId] || '')}: ${esc(t.motivo)}`
+        : `${t.tipo === 'roja' ? '🟥' : '🟨'} <strong>${pesos(valorDeTarjeta(t))}</strong> · ${esc(nombreJ[t.jugadorId] || '—')} (${esc(nombreEq[t.equipoId] || '')})`}
       <div class="muted" style="font-size:12px">Cobró: ${t.cobradoPor ? esc(t.cobradoPor) : 'sin registrar'}${t.cobradoEn ? ' · ' + esc(fmtTime(t.cobradoEn)) : ''}
         · ${t.liquidada ? `<span style="color:#2E7D46">✅ Entregada${t.liquidadaEn ? ' ' + esc(fmtTime(t.liquidadaEn)) : ''}</span>` : '<span style="color:#B8860B">💰 En mano</span>'}</div>
     </div>`).join('') || '<p class="muted">Todavía no hay cobros registrados.</p>';
@@ -1369,35 +1392,131 @@ function resumenCobrosHtml(tarjetas, teams, players, matches) {
   const miMano = yo ? enMano(yo) : [];
   const bloqueLiquidar = yo ? `<div style="margin:10px 0;padding:10px;border-radius:10px;background:${miMano.length ? '#FBF3DC' : '#E3F3E8'}">
       <div style="font-weight:700">${esc(yo)}, tienes en la mano: ${pesos(suma(miMano))}</div>
-      <div class="muted" style="font-size:12px">${miMano.length} tarjeta${miMano.length === 1 ? '' : 's'} cobrada${miMano.length === 1 ? '' : 's'} sin entregar</div>
+      <div class="muted" style="font-size:12px">${miMano.length} cobro${miMano.length === 1 ? '' : 's'} (tarjetas y multas) sin entregar</div>
       ${miMano.length ? `<button class="btn-primary" style="width:100%;margin-top:8px" onclick="orgLiquidar()">💵 Liquidar ${pesos(suma(miMano))} (ya entregué la plata)</button>` : ''}
     </div>` : '';
 
   return `<div class="card" style="border:2px solid #2E7D46">
     <div style="font-weight:700;font-size:16px">💰 Cobros de tarjetas</div>
-    <div class="muted" style="font-size:12px;margin-bottom:8px">Amarilla ${pesos(VALOR_TARJETA.amarilla)} · Roja ${pesos(VALOR_TARJETA.roja)}</div>
+    <div class="muted" style="font-size:12px;margin-bottom:8px">Desde el 21 de nov.: amarilla ${pesos(VALOR_TARJETA_NUEVO.amarilla)} · roja ${pesos(VALOR_TARJETA_NUEVO.roja)} (antes ${pesos(VALOR_TARJETA.amarilla)} y ${pesos(VALOR_TARJETA.roja)}). Las multas suman aquí también.</div>
     <div class="grid2" style="margin-bottom:10px">
       <div style="text-align:center;padding:10px;border-radius:10px;background:#E3F3E8">
         <div class="muted" style="font-size:12px">Total cobrado</div>
         <div class="bebas" style="font-size:28px;color:#2E7D46">${pesos(suma(pagadas))}</div>
-        <div class="muted" style="font-size:12px">${cuenta(pagadas, 'amarilla')} amarillas · ${cuenta(pagadas, 'roja')} rojas</div>
+        <div class="muted" style="font-size:12px">${cuenta(pagadas, 'amarilla')} amarillas · ${cuenta(pagadas, 'roja')} rojas · ${cuenta(pagadas, 'multa')} multas</div>
       </div>
       <div style="text-align:center;padding:10px;border-radius:10px;background:#FBF3DC">
         <div class="muted" style="font-size:12px">Falta por cobrar</div>
         <div class="bebas" style="font-size:28px;color:#B8860B">${pesos(suma(pendientes))}</div>
-        <div class="muted" style="font-size:12px">${cuenta(pendientes, 'amarilla')} amarillas · ${cuenta(pendientes, 'roja')} rojas</div>
+        <div class="muted" style="font-size:12px">${cuenta(pendientes, 'amarilla')} amarillas · ${cuenta(pendientes, 'roja')} rojas · ${cuenta(pendientes, 'multa')} multas</div>
       </div>
     </div>
     ${bloqueLiquidar}
     <div style="font-weight:600;font-size:14px;margin:4px 0">Cobrado por cada organizador</div>
-    <div style="overflow-x:auto"><table class="resumen tabla-cobros"><thead><tr><th>Organizador</th><th>🟨</th><th>🟥</th><th>Cobró</th><th>Entregó</th><th>En mano</th></tr></thead><tbody>${filasOrg}</tbody></table></div>
+    <div style="overflow-x:auto"><table class="resumen tabla-cobros"><thead><tr><th>Organizador</th><th>Cobró</th><th>Entregó</th><th>En mano</th></tr></thead><tbody>${filasOrg}</tbody></table></div>
     ${filasPend ? `<div style="font-weight:600;font-size:14px;margin:12px 0 4px">Falta por cobrar (según el organizador a cargo del partido)</div>
-    <div style="overflow-x:auto"><table class="resumen"><thead><tr><th>Responsable</th><th>🟨</th><th>🟥</th><th>Total</th></tr></thead><tbody>${filasPend}</tbody></table></div>` : ''}
+    <div style="overflow-x:auto"><table class="resumen"><thead><tr><th>Responsable</th><th>🟨</th><th>🟥</th><th>⚠️</th><th>Total</th></tr></thead><tbody>${filasPend}</tbody></table></div>` : ''}
     <div class="row" style="padding:10px 0 0;cursor:pointer" onclick="const d=document.getElementById('detCobros');d.style.display=d.style.display==='none'?'block':'none'">
       <div style="flex:1;font-weight:600;font-size:14px">Ver detalle de cada cobro (${pagadas.length})</div><div class="muted">▾</div>
     </div>
     <div id="detCobros" style="display:none;margin-top:6px">${detalle}</div>
   </div>`;
+}
+
+// ---------- MULTAS (no llevó el balón, perdió por W, u otro motivo) ----------
+const MOTIVOS_MULTA = [['balon', 'No llevó el balón'], ['w', 'Perdió por W'], ['otro', 'Otro (escribir)']];
+function multasSeccionHtml(multas, teams, matches) {
+  const nombreEq = {}; teams.forEach(t => nombreEq[t.id] = t.nombre);
+  const pend = multas.filter(m => !m.pagada), pag = multas.filter(m => m.pagada);
+  const ordenEq = [...teams].sort((a, b) => String(a.nombre).localeCompare(String(b.nombre)));
+  return `<div class="card" style="border:2px solid #B8860B">
+    <div class="row" style="align-items:center">
+      <div style="flex:1;font-weight:700;font-size:16px">⚠️ Multas</div>
+      <button class="btn-primary" style="padding:8px 12px;font-size:14px" onclick="multaMostrarForm()">+ Registrar multa</button>
+    </div>
+    <div id="multaForm" style="display:none;margin-top:10px;padding:10px;border-radius:10px;background:#FBF3DC">
+      <label class="lbl">Equipo <span class="req">*</span></label>
+      <select id="mu_equipo" onchange="multaCargarPartidos()"><option value="">Elige el equipo…</option>
+        ${ordenEq.map(t => `<option value="${t.id}">${esc(t.nombre)}</option>`).join('')}</select>
+      <label class="lbl">Partido <span class="muted" style="font-weight:400">(opcional)</span></label>
+      <select id="mu_partido"><option value="">Sin partido</option></select>
+      <label class="lbl">Motivo <span class="req">*</span></label>
+      <select id="mu_motivo"><option value="">Elige el motivo…</option>
+        ${MOTIVOS_MULTA.map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select>
+      <label class="lbl">Detalle <span class="muted" style="font-weight:400">(obligatorio si es "Otro")</span></label>
+      <textarea id="mu_detalle" rows="2" placeholder="Escribe el motivo o un detalle…" style="width:100%;padding:10px;border-radius:8px;border:1px solid #d8ded8;font-family:inherit;font-size:16px;margin-bottom:8px"></textarea>
+      <label class="lbl">Valor de la multa (pesos) <span class="req">*</span></label>
+      <input id="mu_valor" type="number" min="1" inputmode="numeric" placeholder="Ej: 20000">
+      <button class="btn-primary" id="mu_btn" style="width:100%" onclick="multaGuardar()">Registrar multa${window.__cobrador ? ' (' + esc(window.__cobrador.nombre) + ')' : ''}</button>
+    </div>
+    <div style="font-weight:600;font-size:14px;margin:12px 0 4px">Pendientes de pago (${pend.length})</div>
+    ${pend.map(m => multaTarjetaHtml(m, nombreEq, matches)).join('') || '<p class="muted" style="margin:0">No hay multas pendientes.</p>'}
+    ${pag.length ? `<div class="row" style="padding:10px 0 0;cursor:pointer" onclick="const d=document.getElementById('multasPagadas');d.style.display=d.style.display==='none'?'block':'none'">
+      <div style="flex:1;font-weight:600;font-size:14px">Ver multas pagadas (${pag.length})</div><div class="muted">▾</div></div>
+      <div id="multasPagadas" style="display:none">${pag.map(m => multaTarjetaHtml(m, nombreEq, matches)).join('')}</div>` : ''}
+  </div>`;
+}
+function multaTarjetaHtml(m, nombreEq, matches) {
+  const p = matches.find(x => String(x.id) === String(m.matchId));
+  return `<div style="padding:10px 0;border-top:1px solid #eef1ee">
+    <div class="row" style="align-items:center">
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:700">${esc(nombreEq[m.equipoId] || '—')}</div>
+        <div style="font-size:14px">${esc(m.motivo)}${m.detalle ? ' — ' + esc(m.detalle) : ''}</div>
+        <div class="muted" style="font-size:12px">${p ? esc(p.nombre) + ' · ' : ''}Registró: ${esc(m.registradaPor || '—')} · ${esc(fmtTime(m.ts))}</div>
+      </div>
+      <div class="bebas" style="font-size:22px;color:#7A4E00">${pesos(m.valor)}</div>
+    </div>
+    ${m.pagada ? `<div style="margin-top:6px;font-size:13px;color:#2E7D46;font-weight:600">✅ PAGADA · Cobró: ${esc(m.cobradoPor || '—')}${m.cobradoEn ? ' · ' + esc(fmtTime(m.cobradoEn)) : ''}
+        <div style="font-weight:400">${m.liquidada ? '✅ Plata entregada (liquidada)' : '💰 Plata en mano de quien cobró'}</div></div>
+        ${m.liquidada ? '' : `<button class="btn-ghost" style="margin-top:6px;padding:6px 12px;font-size:13px" onclick="multaDeshacer('${m.id}')">Deshacer pago</button>`}`
+      : `<div class="row" style="gap:8px;margin-top:6px;flex-wrap:wrap">
+        <button class="btn-primary" style="padding:8px 12px;font-size:14px" onclick="multaCobrar('${m.id}')">💰 Registrar cobro${window.__cobrador ? ' (' + esc(window.__cobrador.nombre) + ')' : ''}</button>
+        <button class="btn-ghost" style="padding:8px 12px;font-size:13px;color:#B3261E" onclick="multaEliminar('${m.id}')">Eliminar</button>
+      </div>`}
+  </div>`;
+}
+function multaMostrarForm() { const f = document.getElementById('multaForm'); f.style.display = f.style.display === 'none' ? 'block' : 'none'; }
+function multaCargarPartidos() {
+  const eq = document.getElementById('mu_equipo').value;
+  const { matches, teams } = window.__multasData || { matches: [], teams: [] };
+  const nombreDe = {}; teams.forEach(t => nombreDe[t.id] = t.nombre);
+  const lista = matches.filter(m => eq && (m.equipoA === eq || m.equipoB === eq)).sort((a, b) => (Number(b.jornada) || 0) - (Number(a.jornada) || 0));
+  document.getElementById('mu_partido').innerHTML = '<option value="">Sin partido</option>' +
+    lista.map(m => `<option value="${m.id}">${esc(m.nombre)} · ${esc(nombreDe[m.equipoA] || '')} vs ${esc(nombreDe[m.equipoB] || '')}</option>`).join('');
+}
+async function multaGuardar() {
+  const c = window.__cobrador; if (!c) { renderOrg(); return; }
+  const eq = document.getElementById('mu_equipo').value, partido = document.getElementById('mu_partido').value;
+  const motivo = document.getElementById('mu_motivo').value, detalle = document.getElementById('mu_detalle').value.trim();
+  const valor = Number(document.getElementById('mu_valor').value);
+  if (!eq) { alert('Elige el equipo.'); return; }
+  if (!motivo) { alert('Elige el motivo.'); return; }
+  if (motivo === 'otro' && !detalle) { alert('Escribe el motivo de la multa.'); return; }
+  if (!valor || valor <= 0) { alert('Escribe el valor de la multa.'); return; }
+  const { teams } = window.__multasData || { teams: [] };
+  const nom = (teams.find(t => t.id === eq) || {}).nombre || '';
+  const txtMotivo = (MOTIVOS_MULTA.find(x => x[0] === motivo) || [, ''])[1];
+  if (!confirm(`¿Registrar multa a ${nom} por ${pesos(valor)}?\n\nMotivo: ${txtMotivo}${detalle ? ' — ' + detalle : ''}`)) return;
+  const btn = document.getElementById('mu_btn'); btn.disabled = true; btn.textContent = 'Guardando…';
+  try { await gsCall('addMulta', eq, partido, motivo, detalle, valor, c.pin); refrescarTarjetas(); }
+  catch (e) { btn.disabled = false; btn.textContent = 'Registrar multa'; alert(e && e.message ? e.message : 'No se pudo registrar la multa.'); }
+}
+async function multaCobrar(id) {
+  const c = window.__cobrador; if (!c) { renderOrg(); return; }
+  const m = ((window.__multasData || {}).multas || []).find(x => x.id === id);
+  if (!confirm(`¿Registrar que ${c.nombre} cobró esta multa${m ? ' de ' + pesos(m.valor) : ''}?`)) return;
+  try { await gsCall('cobrarMulta', id, c.pin); refrescarTarjetas(); } catch (e) { alert(e && e.message ? e.message : 'No se pudo registrar el cobro.'); }
+}
+async function multaDeshacer(id) {
+  const c = window.__cobrador; if (!c) { renderOrg(); return; }
+  if (!confirm('¿Deshacer el cobro de esta multa? Vuelve a quedar pendiente.')) return;
+  try { await gsCall('deshacerCobroMulta', id, c.pin); refrescarTarjetas(); } catch (e) { alert(e && e.message ? e.message : 'No se pudo deshacer.'); }
+}
+async function multaEliminar(id) {
+  const c = window.__cobrador; if (!c) { renderOrg(); return; }
+  if (!confirm('¿Eliminar esta multa? (Solo si se registró por error.)')) return;
+  try { await gsCall('eliminarMulta', id, c.pin); refrescarTarjetas(); } catch (e) { alert(e && e.message ? e.message : 'No se pudo eliminar.'); }
 }
 
 // Las tarjetas de UN equipo (con sus botones de sanción, pago y eliminar)
@@ -1647,6 +1766,14 @@ async function delegatePartidosHtml() {
   const nuevas = conRespuesta.filter(i => !vista(i));
   const respuestaDe = {}; conRespuesta.forEach(i => { respuestaDe[i.matchId] = vista(i) ? 'vista' : 'nueva'; });
   let html = '';
+  let misMultas = [];
+  try { misMultas = ((await gsCall('getMultas')) || []).filter(m => !m.pagada); } catch (e) {}
+  if (misMultas.length) {
+    html += `<div class="card" style="border:2px solid #B8860B;background:#FBF3DC">
+      <div style="font-weight:700;color:#7A4E00">⚠️ Tu equipo tiene ${misMultas.length} multa${misMultas.length === 1 ? '' : 's'} pendiente${misMultas.length === 1 ? '' : 's'}: ${pesos(misMultas.reduce((s, m) => s + (Number(m.valor) || 0), 0))}</div>
+      ${misMultas.map(m => `<div style="font-size:13px;margin-top:4px">• ${esc(m.motivo)}${m.detalle ? ' — ' + esc(m.detalle) : ''}: <strong>${pesos(m.valor)}</strong></div>`).join('')}
+    </div>`;
+  }
   if (nuevas.length) {
     html += `<div class="card" style="border:2px solid #2E7D46;background:#E3F3E8">
       <div style="font-weight:700;color:#2E7D46">📬 Tienes ${nuevas.length} respuesta${nuevas.length === 1 ? '' : 's'} nueva${nuevas.length === 1 ? '' : 's'} del organizador</div>
